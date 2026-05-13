@@ -225,11 +225,13 @@ def run_pipeline(
 
     # 2. Score
     score_records(records)
-    logger.info(
-        "Scoring complete.  Score range: %.1f – %.1f",
-        min(r.score for r in records if r.score is not None),
-        max(r.score for r in records if r.score is not None),
-    )
+    scored = [r for r in records if r.score is not None]
+    if scored:
+        logger.info(
+            "Scoring complete.  Score range: %.1f – %.1f",
+            min(r.score for r in scored),
+            max(r.score for r in scored),
+        )
 
     if not dry_run:
         # 3. Deduplicate (requires DB access)

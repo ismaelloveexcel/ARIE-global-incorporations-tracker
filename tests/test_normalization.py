@@ -28,9 +28,8 @@ class TestNormalizeName:
         assert normalize_name("Gamma Trust") == "gamma"
 
     def test_unicode_normalisation(self):
-        # Accented characters should be folded to ASCII
-        result = normalize_name("Société Générale Ltd")
-        assert "socit" in result or "societe" in result or "sociale" in result
+        # Accented characters should be folded to ASCII equivalents
+        assert normalize_name("Société Générale Ltd") == "societe generale"
 
     def test_collapses_whitespace(self):
         assert normalize_name("  Alpha   Beta  Ltd  ") == "alpha beta"
