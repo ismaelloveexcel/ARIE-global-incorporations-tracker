@@ -206,8 +206,16 @@ def fetch_new_incorporations(
                         continue  # Already seen
 
                     rec = _parse_record(raw)
-                    if rec:
-                        records.append(rec)
+                    if rec is None:
+                        continue
+
+                    # Skip records whose incorporation date is before the cutoff.
+                    # Records with no parseable date are included because the
+                    # snapshot diff acts as the primary recency guard.
+                    if rec.incorporation_date and rec.incorporation_date < cutoff:
+                        continue
+
+                    records.append(rec)
 
                 # Pagination
                 next_btn = page.query_selector(_NEXT_PAGE_SELECTOR)

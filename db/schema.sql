@@ -2,6 +2,23 @@
 -- Run this migration against your Supabase project via the SQL editor or psql.
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- canonical_entities
+-- Deduplicated master entity records.  One row per real-world company.
+-- Must be created before companies because companies holds a FK to this table.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS canonical_entities (
+    id              BIGSERIAL PRIMARY KEY,
+    canonical_name  TEXT        NOT NULL,
+    jurisdictions   TEXT[]      NOT NULL DEFAULT '{}',  -- all jurisdictions seen
+    first_seen      DATE,
+    last_seen       DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_canonical_entities_canonical_name ON canonical_entities (canonical_name);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- companies
 -- Raw, normalised company records from all ingestion sources.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -35,22 +52,6 @@ CREATE INDEX IF NOT EXISTS idx_companies_jurisdiction         ON companies (juri
 CREATE INDEX IF NOT EXISTS idx_companies_incorporation_date   ON companies (incorporation_date);
 CREATE INDEX IF NOT EXISTS idx_companies_canonical_entity_id  ON companies (canonical_entity_id);
 CREATE INDEX IF NOT EXISTS idx_companies_score                ON companies (score);
-
--- ─────────────────────────────────────────────────────────────────────────────
--- canonical_entities
--- Deduplicated master entity records.  One row per real-world company.
--- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS canonical_entities (
-    id              BIGSERIAL PRIMARY KEY,
-    canonical_name  TEXT        NOT NULL,
-    jurisdictions   TEXT[]      NOT NULL DEFAULT '{}',  -- all jurisdictions seen
-    first_seen      DATE,
-    last_seen       DATE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_canonical_entities_canonical_name ON canonical_entities (canonical_name);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Auto-update updated_at via trigger

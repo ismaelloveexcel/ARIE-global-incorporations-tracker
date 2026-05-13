@@ -10,16 +10,16 @@ from normalization.schema import CompanyRecord
 
 
 class _MockDB:
-    """Minimal DB stub that records canonical entity creation calls."""
+    """Minimal DB stub that records canonical entity upsert calls."""
 
     def __init__(self, next_id: int = 200):
         self._next_id = next_id
-        self.created: list[dict] = []
+        self.upserted: list[dict] = []
 
     def upsert_canonical_entity(self, canonical_name, jurisdiction, date):
         cid = self._next_id
         self._next_id += 1
-        self.created.append(
+        self.upserted.append(
             {"id": cid, "canonical_name": canonical_name, "jurisdiction": jurisdiction}
         )
         return cid
@@ -75,7 +75,9 @@ class TestDeduplicator:
         )
         cid = dedup.resolve(rec, mock_db)
         assert cid == 101
-        assert len(mock_db.created) == 0  # No new entity created
+        # upsert_canonical_entity is called once to update metadata (jurisdictions/dates)
+        assert len(mock_db.upserted) == 1
+        assert mock_db.upserted[0]["canonical_name"] == "acme fintech"
 
     def test_resolve_creates_new_canonical_entity(self):
         dedup = Deduplicator()
@@ -89,7 +91,7 @@ class TestDeduplicator:
         )
         cid = dedup.resolve(rec, mock_db)
         assert cid == 500
-        assert len(mock_db.created) == 1
+        assert len(mock_db.upserted) == 1
 
     def test_duplicate_rows_not_double_indexed(self):
         rows = [
@@ -99,6 +101,25 @@ class TestDeduplicator:
         dedup = Deduplicator()
         dedup.load_existing(rows)
         assert len(dedup._index) == 1
+
+    def test_resolve_updates_jurisdiction_on_cross_jurisdiction_match(self):
+        """A match in a different jurisdiction should update the canonical entity metadata."""
+        dedup = Deduplicator()
+        dedup.load_existing(_existing_rows())
+        mock_db = _MockDB()
+
+        rec = CompanyRecord(
+            company_name="Acme Fintech Ltd",
+            jurisdiction="DIFC",   # different jurisdiction from the existing UK entry
+            source="difc",
+        )
+        cid = dedup.resolve(rec, mock_db)
+        assert cid == 101
+        # upsert_canonical_entity called to merge DIFC jurisdiction into existing entity
+        assert len(mock_db.upserted) == 1
+        assert mock_db.upserted[0]["jurisdiction"] == "DIFC"
+        # In-memory index updated too
+        assert "DIFC" in dedup._index["acme fintech"].jurisdictions
 
     def test_rows_without_canonical_entity_id_skipped(self):
         rows = [

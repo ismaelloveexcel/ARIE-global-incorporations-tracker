@@ -15,7 +15,7 @@ from supabase import Client, create_client
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+_FETCH_PAGE_SIZE = 1000  # rows per page when building the deduplication index
 
 
 def _get_client() -> Client:
@@ -103,15 +103,27 @@ def fetch_all_companies(jurisdiction: str | None = None) -> list[dict[str, Any]]
     """
     Fetch companies, optionally filtered by jurisdiction.
     Used by the deduplication pass to build the in-memory index.
+
+    Results are fetched in pages to avoid hitting the PostgREST row limit.
     """
     client = get_client()
-    query = client.table("companies").select(
-        "id, normalized_name, jurisdiction, canonical_entity_id"
-    )
-    if jurisdiction:
-        query = query.eq("jurisdiction", jurisdiction)
-    result = query.execute()
-    return result.data or []
+    offset = 0
+    all_rows: list[dict[str, Any]] = []
+
+    while True:
+        query = client.table("companies").select(
+            "id, normalized_name, jurisdiction, canonical_entity_id"
+        )
+        if jurisdiction:
+            query = query.eq("jurisdiction", jurisdiction)
+        result = query.range(offset, offset + _FETCH_PAGE_SIZE - 1).execute()
+        rows = result.data or []
+        all_rows.extend(rows)
+        if len(rows) < _FETCH_PAGE_SIZE:
+            break
+        offset += _FETCH_PAGE_SIZE
+
+    return all_rows
 
 
 def set_canonical_entity_id(company_id: int, canonical_entity_id: int) -> None:

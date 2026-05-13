@@ -72,6 +72,32 @@ class TestScoringEngine:
         # (entity type may differ; just ensure score is positive)
         assert difc >= 0
 
+    def test_sic_score_zero_for_non_uk(self):
+        """SIC codes should only contribute to UK records."""
+        uk_rec = _rec("Alpha Ltd", jurisdiction="UK", entity_type="private limited company", sic_codes=["64990"])
+        difc_rec = CompanyRecord(
+            company_name="Alpha Ltd",
+            jurisdiction="DIFC",
+            source="test",
+            entity_type="company limited by shares",
+            raw_data={"sic_codes": ["64990"]},
+        )
+        mu_rec = CompanyRecord(
+            company_name="Alpha Ltd",
+            jurisdiction="Mauritius",
+            source="test",
+            entity_type="GBC",
+            raw_data={"sic_codes": ["64990"]},
+        )
+        uk_score = score(uk_rec)
+        difc_score = score(difc_rec)
+        mu_score = score(mu_rec)
+        # UK score includes SIC contribution; DIFC/Mauritius should not
+        from scoring.engine import _sic_score
+        assert _sic_score(uk_rec) == 20.0
+        assert _sic_score(difc_rec) == 0.0
+        assert _sic_score(mu_rec) == 0.0
+
     def test_no_entity_type_still_scores(self):
         s = score(_rec("Blockchain Payments Inc", jurisdiction="Mauritius"))
         assert s > 0

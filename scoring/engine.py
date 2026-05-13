@@ -113,7 +113,13 @@ def _jurisdiction_score(record: CompanyRecord) -> float:
 
 
 def _sic_score(record: CompanyRecord) -> float:
-    """Extract SIC codes from raw_data and return the highest sector weight."""
+    """Extract SIC codes from raw_data and return the highest sector weight.
+
+    SIC codes are a UK-only classification; non-UK records always score 0.
+    """
+    if record.jurisdiction != "UK":
+        return 0.0
+
     sic_codes: list[str] = []
 
     # Companies House API returns sic_codes as a list of strings

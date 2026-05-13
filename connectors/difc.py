@@ -81,14 +81,22 @@ def _parse_record(raw: dict, cutoff_date: str) -> CompanyRecord | None:
     """
     Build a CompanyRecord from a raw scraped row dict.
 
-    Returns None if the record pre-dates *cutoff_date* or has no name.
+    Returns None if:
+    - the row has no company name, or
+    - the incorporation date is present but pre-dates *cutoff_date*, or
+    - the incorporation date is missing or cannot be parsed.
+
+    Records without a parseable date are **always excluded** to prevent
+    the daily pipeline from emitting the entire visible register when the
+    date field is absent (e.g. the fallback extractor path).  This is an
+    intentional conservative choice: without a known date we cannot safely
+    determine whether the company is new.
     """
     name = raw.get("company_name", "").strip()
     if not name:
         return None
 
     inc_date_raw = raw.get("incorporation_date", "")
-    # Very basic date normalisation – DIFC site may use various formats
     inc_date: str | None = None
     if inc_date_raw:
         try:
@@ -98,7 +106,12 @@ def _parse_record(raw: dict, cutoff_date: str) -> CompanyRecord | None:
             if inc_date < cutoff_date:
                 return None
         except Exception:
-            inc_date = None
+            # Date is present but not parseable — skip rather than accepting
+            # an undated record that could be from any point in history.
+            return None
+    else:
+        # No date available — skip for the same reason as unparseable dates.
+        return None
 
     return CompanyRecord(
         company_name=name,

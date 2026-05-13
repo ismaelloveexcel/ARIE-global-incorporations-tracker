@@ -64,8 +64,8 @@ def _fetch_page(
     start_index: int,
 ) -> dict:
     params = {
-        "incorporatedFrom": date_from,
-        "incorporatedTo": date_to,
+        "incorporated_from": date_from,
+        "incorporated_to": date_to,
         "size": _PAGE_SIZE,
         "start_index": start_index,
     }

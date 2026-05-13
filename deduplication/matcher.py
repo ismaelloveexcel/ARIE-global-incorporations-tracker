@@ -152,6 +152,15 @@ class Deduplicator:
         """
         match = self.find_match(record.normalized_name)
         if match:
+            # Update the canonical entity in the DB with the new jurisdiction
+            # and sighting date so cross-jurisdiction matches are fully tracked.
+            db_module.upsert_canonical_entity(
+                canonical_name=match.canonical_name,
+                jurisdiction=record.jurisdiction,
+                date=record.incorporation_date,
+            )
+            # Keep the in-memory index consistent.
+            match.jurisdictions.add(record.jurisdiction)
             return match.canonical_entity_id
 
         # Create a new canonical entity
