@@ -1,0 +1,92 @@
+name: Incorporation Intelligence Engine — Daily Pipeline
+
+on:
+  schedule:
+    # Runs at 06:00 UTC every day
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Specific date to process (YYYY-MM-DD). Leave blank for yesterday."
+        required: false
+        default: ""
+      lookback:
+        description: "Number of days back to fetch (ignored when date is set)."
+        required: false
+        default: "1"
+      skip_difc:
+        description: "Skip DIFC scraper (true/false)"
+        required: false
+        default: "false"
+      skip_mauritius:
+        description: "Skip Mauritius MNS scraper (true/false)"
+        required: false
+        default: "false"
+      dry_run:
+        description: "Dry run — parse and score only, no DB writes (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  pipeline:
+    name: Run incorporation pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      COMPANIES_HOUSE_API_KEY: ${{ secrets.COMPANIES_HOUSE_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install --with-deps chromium
+
+      - name: Build CLI arguments
+        id: build_args
+        shell: bash
+        run: |
+          ARGS=""
+          DATE="${{ github.event.inputs.date }}"
+          if [ -n "$DATE" ]; then
+            ARGS="$ARGS --date $DATE"
+          else
+            LOOKBACK="${{ github.event.inputs.lookback }}"
+            LOOKBACK="${LOOKBACK:-1}"
+            ARGS="$ARGS --lookback $LOOKBACK"
+          fi
+          if [ "${{ github.event.inputs.skip_difc }}" = "true" ]; then
+            ARGS="$ARGS --skip-difc"
+          fi
+          if [ "${{ github.event.inputs.skip_mauritius }}" = "true" ]; then
+            ARGS="$ARGS --skip-mauritius"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Run pipeline
+        run: python main.py ${{ steps.build_args.outputs.args }}
+
+      - name: Upload CSV snapshot as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: incorporation-snapshot-${{ github.run_id }}
+          path: exports/
+          retention-days: 90

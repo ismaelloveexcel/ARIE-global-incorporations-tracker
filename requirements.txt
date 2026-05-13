@@ -1,0 +1,17 @@
+# HTTP / API
+requests>=2.31.0
+
+# Playwright (browser automation for DIFC + Mauritius scrapers)
+playwright>=1.44.0
+
+# Fuzzy matching for deduplication
+rapidfuzz>=3.6.1
+
+# Supabase Python client
+supabase>=2.4.0
+
+# Data handling
+python-dateutil>=2.9.0
+
+# Environment variable management
+python-dotenv>=1.0.1
