@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS companies (
     entity_type         TEXT,                          -- 'Ltd', 'GBC', 'Authorised Company', …
     incorporation_date  DATE,
 
+    -- Classification
+    sector              TEXT,                          -- human-readable sector description
+    assigned_to         TEXT,                          -- downstream CRM assignee (optional)
+
     -- Scoring
     score               NUMERIC(5, 2),                 -- 0–100
 

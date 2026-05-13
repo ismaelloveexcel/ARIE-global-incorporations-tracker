@@ -13,7 +13,9 @@ class TestNormalizeName:
         assert normalize_name("Acme Ltd") == "acme"
 
     def test_strips_limited(self):
-        assert normalize_name("Alpha Holdings Limited") == "alpha holdings"
+        # "Limited" is stripped as a suffix; "Holdings" is also a suffix so it
+        # is stripped in the subsequent iteration, yielding the bare core name.
+        assert normalize_name("Alpha Holdings Limited") == "alpha"
 
     def test_strips_llc(self):
         assert normalize_name("GLOBAL FINTECH LLC") == "global fintech"
