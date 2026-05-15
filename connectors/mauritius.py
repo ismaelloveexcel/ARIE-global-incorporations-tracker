@@ -1,243 +1,405 @@
 """
 connectors/mauritius.py
 ────────────────────────
-Mauritius Registrar of Companies (MNS) online search scraper.
+Mauritius CBRD online search scraper (Playwright).
 
-Uses Playwright to interact with:
-  https://companies.mns.mu/
-
-Supports:
-  - Full pagination through all result pages
-  - Snapshot diffing: persists a JSON snapshot of last-seen company names
-    to ``snapshots/mauritius_snapshot.json`` and only emits records that
-    are new since the previous run.
-
-Environment variables
-─────────────────────
-  None required beyond Playwright being installed.
-
-Usage
-─────
-    from connectors.mauritius import fetch_new_incorporations
-    records = fetch_new_incorporations()
+Site: https://onlinesearch.mns.mu/
+Filters by incorporation/registration date range and returns
+GBC and Authorised Company rows only.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import os
-from datetime import date, timedelta
-from pathlib import Path
+import re
+from datetime import datetime
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
 from normalization.schema import CompanyRecord
 
 logger = logging.getLogger(__name__)
 
 _SOURCE = "mauritius_mns"
-_BASE_URL = "https://companies.mns.mu/"
-_SNAPSHOT_DIR = Path("snapshots")
-_SNAPSHOT_FILE = _SNAPSHOT_DIR / "mauritius_snapshot.json"
+_BASE_URL = "https://onlinesearch.mns.mu/"
 
-# Selectors (update if site markup changes)
-_COMPANY_ROW_SELECTOR = "table tbody tr"
-_NEXT_PAGE_SELECTOR = "a[aria-label='Next'], .next-page, [data-page='next']"
-_SEARCH_INPUT_SELECTOR = "input[type='text'], input[name='search'], #searchInput"
-_SEARCH_BUTTON_SELECTOR = "button[type='submit'], #searchBtn, .search-button"
+_HEADER_MAP = {
+    "name": "company_name",
+    "fileno.": "file_no",
+    "fileno": "file_no",
+    "category": "entity_type",
+    "incorporation/registrationdate": "incorporation_date",
+    "nature": "nature",
+    "status": "company_status",
+}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Snapshot helpers
-# ─────────────────────────────────────────────────────────────────────────────
+def _iso_to_dmy(iso_date: str) -> str:
+    """YYYY-MM-DD → dd/mm/yyyy for the site date fields."""
+    dt = datetime.strptime(iso_date.strip(), "%Y-%m-%d")
+    return dt.strftime("%d/%m/%Y")
 
-def _load_snapshot() -> dict[str, str]:
-    """Return the previous snapshot {name_hash: company_name} or empty dict."""
-    if _SNAPSHOT_FILE.exists():
+
+def _dmy_to_iso(dmy: str) -> str | None:
+    """dd/mm/yyyy → YYYY-MM-DD."""
+    text = (dmy or "").strip()
+    if not text:
+        return None
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
-            with _SNAPSHOT_FILE.open() as fh:
-                return json.load(fh)
-        except Exception as exc:
-            logger.warning("Could not load snapshot: %s", exc)
-    return {}
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    logger.debug("Could not parse Mauritius date: %s", dmy)
+    return None
 
 
-def _save_snapshot(snapshot: dict[str, str]) -> None:
-    _SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    with _SNAPSHOT_FILE.open("w") as fh:
-        json.dump(snapshot, fh, indent=2)
-    logger.debug("Snapshot saved (%d entries).", len(snapshot))
+def _category_matches(category: str) -> bool:
+    """Keep GBC and Authorised Company rows only (case-insensitive)."""
+    text = (category or "").strip().lower()
+    if not text:
+        return False
+    if "global business company" in text or "gbc" in text:
+        return True
+    if "authorised company" in text or "authorized company" in text:
+        return True
+    if re.search(r"\bac\b", text):
+        return True
+    return False
 
 
-def _name_hash(name: str) -> str:
-    """Stable hash key for a company name."""
-    return hashlib.sha256(name.strip().lower().encode()).hexdigest()[:16]
+def _normalise_header(label: str) -> str:
+    """Collapse whitespace so 'Incorporation/ Registration Date' matches map keys."""
+    return label.strip().replace(" ", "").lower()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Scraping helpers
-# ─────────────────────────────────────────────────────────────────────────────
+def _header_to_field(key: str) -> str | None:
+    if key == "#" or key.startswith("#"):
+        return None
+    if key in _HEADER_MAP:
+        return _HEADER_MAP[key]
+    if "incorporation" in key and "date" in key:
+        return "incorporation_date"
+    return None
 
-def _extract_rows(page: Page) -> list[dict]:
-    """Extract company rows from the current Mauritius MNS page."""
-    rows: list[dict] = []
 
-    table_rows = page.query_selector_all(_COMPANY_ROW_SELECTOR)
-    for tr in table_rows:
-        cells = tr.query_selector_all("td")
+def _column_index_by_header(headers: list[str]) -> dict[str, int]:
+    """Map logical field names to column indices using header text."""
+    indices: dict[str, int] = {}
+    for idx, raw in enumerate(headers):
+        field = _header_to_field(_normalise_header(raw))
+        if field:
+            indices[field] = idx
+    return indices
+
+
+def _accept_cookies_if_present(page: Page) -> None:
+    for label in ("Accept All", "Accept all", "Accept"):
+        try:
+            btn = page.get_by_role("button", name=label)
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=3000)
+                page.wait_for_timeout(500)
+                return
+        except PlaywrightTimeout:
+            continue
+        except Exception:
+            continue
+
+
+def _fill_input(el, iso_date: str) -> str:
+    """Fill date control — HTML date inputs need YYYY-MM-DD; text inputs use dd/mm/yyyy."""
+    input_type = (el.get_attribute("type") or "").lower()
+    value = iso_date if input_type == "date" else _iso_to_dmy(iso_date)
+    el.fill(value)
+    try:
+        return el.input_value()
+    except Exception:
+        return el.get_attribute("value") or value
+
+
+def _input_blob(el) -> str:
+    parts = [
+        el.get_attribute("id") or "",
+        el.get_attribute("placeholder") or "",
+        el.get_attribute("formcontrolname") or "",
+        el.get_attribute("aria-label") or "",
+    ]
+    return " ".join(parts).lower()
+
+
+def _find_date_field(page: Page, kind: str, prefer_incorporation: bool = True):
+    """Find From or To date input; prefer incorporation/registration fields."""
+    inputs = page.locator("input[type='date'], input[type='text']")
+    candidates: list[tuple[int, object]] = []
+
+    for i in range(min(inputs.count(), 24)):
+        el = inputs.nth(i)
+        try:
+            if not el.is_visible():
+                continue
+            blob = _input_blob(el)
+            if "date" not in blob and "from" not in blob and "to" not in blob:
+                continue
+            is_from = "from" in blob
+            is_to = "to" in blob and not is_from
+            if kind == "from" and not is_from:
+                continue
+            if kind == "to" and not is_to:
+                continue
+            score = 0
+            if prefer_incorporation and ("incorporation" in blob or "registration" in blob):
+                score += 10
+            if "partnership" in blob or "company" in blob:
+                score -= 2
+            candidates.append((score, el))
+        except Exception:
+            continue
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def _fill_date_range(page: Page, date_from: str, date_to: str) -> tuple[str, str]:
+    from_el = _find_date_field(page, "from")
+    to_el = _find_date_field(page, "to")
+
+    if from_el is None or to_el is None:
+        raise RuntimeError("Could not locate incorporation date From/To fields")
+
+    entered_from = _fill_input(from_el, date_from)
+    page.wait_for_timeout(500)
+    entered_to = _fill_input(to_el, date_to)
+    page.wait_for_timeout(500)
+
+    logger.info(
+        "Mauritius date fields set — From: %s (requested %s), To: %s (requested %s)",
+        entered_from,
+        date_from,
+        entered_to,
+        date_to,
+    )
+    return entered_from, entered_to
+
+
+def _click_search(page: Page) -> None:
+    for locator in (
+        page.get_by_role("button", name=re.compile(r"^search$", re.I)),
+        page.locator("button:has-text('Search')"),
+        page.locator("input[type='submit'][value*='Search' i]"),
+    ):
+        try:
+            if locator.count():
+                locator.first.click(timeout=10_000)
+                return
+        except Exception:
+            continue
+    raise RuntimeError("Could not locate Search button")
+
+
+def _parse_results_table(page: Page) -> list[dict[str, str]]:
+    table = page.locator("table").filter(has=page.locator("th")).first
+    table.wait_for(state="visible", timeout=30_000)
+
+    raw_headers = [th.inner_text() for th in table.locator("th").all()]
+    headers = [_normalise_header(h) for h in raw_headers]
+    col = _column_index_by_header(raw_headers)
+    if "company_name" not in col:
+        raise RuntimeError(
+            f"Results table missing Name column; headers={raw_headers!r} normalised={headers!r}"
+        )
+    if "incorporation_date" not in col:
+        logger.warning(
+            "Incorporation date column not matched; headers=%r normalised=%r",
+            raw_headers,
+            headers,
+        )
+
+    rows: list[dict[str, str]] = []
+    for tr in table.locator("tbody tr").all():
+        cells = tr.locator("td").all()
         if not cells:
             continue
-        row: dict = {"raw_text": tr.inner_text()}
-        if len(cells) >= 1:
-            row["company_name"] = cells[0].inner_text().strip()
-        if len(cells) >= 2:
-            row["registration_number"] = cells[1].inner_text().strip()
-        if len(cells) >= 3:
-            row["entity_type"] = cells[2].inner_text().strip()
-        if len(cells) >= 4:
-            row["incorporation_date"] = cells[3].inner_text().strip()
-        if len(cells) >= 5:
-            row["status"] = cells[4].inner_text().strip()
-        rows.append(row)
+        values = [c.inner_text().strip() for c in cells]
 
+        row: dict[str, str] = {}
+        for field, idx in col.items():
+            if idx < len(values):
+                row[field] = values[idx]
+        if row.get("company_name"):
+            rows.append(row)
     return rows
 
 
-def _parse_record(raw: dict) -> CompanyRecord | None:
-    name = raw.get("company_name", "").strip()
-    if not name:
+def _has_next_page(page: Page) -> bool:
+    for locator in (
+        page.get_by_role("link", name=re.compile(r"next", re.I)),
+        page.get_by_role("button", name=re.compile(r"next", re.I)),
+        page.locator("a:has-text('Next')"),
+        page.locator("button:has-text('Next')"),
+    ):
+        try:
+            if not locator.count():
+                continue
+            el = locator.first
+            if not el.is_visible():
+                continue
+            disabled = el.get_attribute("disabled")
+            aria_disabled = el.get_attribute("aria-disabled")
+            classes = el.get_attribute("class") or ""
+            if disabled is not None or aria_disabled == "true" or "disabled" in classes.lower():
+                continue
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _click_next_page(page: Page) -> None:
+    for locator in (
+        page.get_by_role("link", name=re.compile(r"next", re.I)),
+        page.get_by_role("button", name=re.compile(r"next", re.I)),
+        page.locator("a:has-text('Next')"),
+        page.locator("button:has-text('Next')"),
+    ):
+        try:
+            if locator.count() and locator.first.is_visible():
+                locator.first.click(timeout=10_000)
+                page.wait_for_load_state("networkidle", timeout=60_000)
+                page.wait_for_timeout(1000)
+                return
+        except Exception:
+            continue
+    raise RuntimeError("Next page control not clickable")
+
+
+def _parse_incorporation_date(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    iso = _dmy_to_iso(text)
+    if iso:
+        return iso
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        pass
+    logger.debug("Could not parse incorporation date cell: %r", raw)
+    return ""
+
+
+def _row_to_record(row: dict[str, str]) -> CompanyRecord | None:
+    name = (row.get("company_name") or "").strip()
+    category = (row.get("entity_type") or "").strip()
+    if not name or not _category_matches(category):
         return None
 
-    inc_date: str | None = None
-    inc_date_raw = raw.get("incorporation_date", "")
-    if inc_date_raw:
-        try:
-            from dateutil import parser as dateparser
-            inc_date = dateparser.parse(inc_date_raw, dayfirst=False).date().isoformat()
-        except Exception:
-            inc_date = None
+    inc_iso = _parse_incorporation_date(row.get("incorporation_date", ""))
+    status = (row.get("company_status") or "").strip()
 
     return CompanyRecord(
         company_name=name,
         jurisdiction="Mauritius",
         source=_SOURCE,
-        entity_type=raw.get("entity_type"),
-        incorporation_date=inc_date,
-        raw_data=raw,
+        entity_type=category,
+        incorporation_date=inc_iso or "",
+        raw_data={
+            "file_no": (row.get("file_no") or "").strip(),
+            "nature": (row.get("nature") or "").strip(),
+            "company_status": status,
+            "email": "",
+            "phone": "",
+        },
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────────────────────
+def _scrape_date_range(page: Page, date_from: str, date_to: str) -> list[CompanyRecord]:
+    page.goto(_BASE_URL, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(1500)
+    _accept_cookies_if_present(page)
+    _fill_date_range(page, date_from, date_to)
+    _click_search(page)
+    page.wait_for_load_state("networkidle", timeout=60_000)
+    page.wait_for_timeout(2000)
+
+    records: list[CompanyRecord] = []
+    seen: set[str] = set()
+    page_num = 1
+
+    while True:
+        logger.debug("Mauritius scraper: parsing results page %d", page_num)
+        try:
+            raw_rows = _parse_results_table(page)
+        except Exception as exc:
+            logger.warning("Mauritius results table parse failed on page %d: %s", page_num, exc)
+            break
+
+        for raw in raw_rows:
+            rec = _row_to_record(raw)
+            if rec is None:
+                continue
+            key = f"{rec.company_name}|{rec.raw_data.get('file_no', '')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append(rec)
+
+        if not _has_next_page(page):
+            break
+        try:
+            _click_next_page(page)
+        except Exception as exc:
+            logger.warning("Mauritius pagination stopped: %s", exc)
+            break
+        page_num += 1
+
+    return records
+
 
 def fetch_new_incorporations(
-    date_from: str | None = None,
-    lookback_days: int = 1,
-    use_snapshot_diff: bool = True,
+    date_from: str,
+    date_to: str | None = None,
 ) -> list[CompanyRecord]:
     """
-    Scrape the Mauritius MNS register for recently incorporated companies.
+    Scrape Mauritius CBRD for companies incorporated between date_from and date_to.
 
     Parameters
     ----------
-    date_from:
-        ISO-8601 date string. Used as a filter hint where the site supports it.
-    lookback_days:
-        Days back to treat as "new" when *date_from* is None.
-    use_snapshot_diff:
-        When True (default) the scraper compares scraped names against a
-        persisted JSON snapshot and only returns *new* entries.
-
-    Returns
-    -------
-    list[CompanyRecord]
+    date_from, date_to:
+        ISO dates (YYYY-MM-DD). If date_to is None, uses date_from (single day).
     """
-    if date_from is None:
-        cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
-    else:
-        cutoff = date_from
+    end = date_to or date_from
+    logger.info("Mauritius scraper: %s → %s", date_from, end)
 
-    logger.info("Mauritius MNS scraper: fetching incorporations on/after %s …", cutoff)
-
-    previous_snapshot = _load_snapshot() if use_snapshot_diff else {}
-    current_snapshot: dict[str, str] = {}
     records: list[CompanyRecord] = []
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                )
             )
+            page = context.new_page()
+            try:
+                records = _scrape_date_range(page, date_from, end)
+            except Exception as exc:
+                logger.error("Mauritius scraper error: %s", exc)
+            finally:
+                browser.close()
+    except Exception as exc:
+        logger.error("Mauritius Playwright failed to start: %s", exc)
+
+    if not records:
+        logger.warning(
+            "Mauritius scraper: zero GBC/Authorised Company rows for %s → %s",
+            date_from,
+            end,
         )
-        page = context.new_page()
+    else:
+        logger.info("Mauritius scraper: collected %d records.", len(records))
 
-        try:
-            page.goto(_BASE_URL, wait_until="networkidle", timeout=60_000)
-            page.wait_for_timeout(2000)
-
-            # Attempt to trigger a search for recently incorporated companies
-            search_input = page.query_selector(_SEARCH_INPUT_SELECTOR)
-            if search_input:
-                search_input.fill(cutoff)
-                search_btn = page.query_selector(_SEARCH_BUTTON_SELECTOR)
-                if search_btn:
-                    search_btn.click()
-                    page.wait_for_load_state("networkidle")
-                    page.wait_for_timeout(2000)
-
-            page_num = 1
-            while True:
-                logger.debug("Mauritius scraper: scraping page %d …", page_num)
-                raw_rows = _extract_rows(page)
-
-                for raw in raw_rows:
-                    name = raw.get("company_name", "").strip()
-                    if not name:
-                        continue
-
-                    key = _name_hash(name)
-                    current_snapshot[key] = name
-
-                    if use_snapshot_diff and key in previous_snapshot:
-                        continue  # Already seen
-
-                    rec = _parse_record(raw)
-                    if rec is None:
-                        continue
-
-                    # Skip records whose incorporation date is before the cutoff.
-                    # Records with no parseable date are included because the
-                    # snapshot diff acts as the primary recency guard.
-                    if rec.incorporation_date and rec.incorporation_date < cutoff:
-                        continue
-
-                    records.append(rec)
-
-                # Pagination
-                next_btn = page.query_selector(_NEXT_PAGE_SELECTOR)
-                if not next_btn:
-                    break
-                disabled = next_btn.get_attribute("disabled")
-                if disabled is not None:
-                    break
-
-                next_btn.click()
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(1500)
-                page_num += 1
-
-        except Exception as exc:
-            logger.error("Mauritius MNS scraper error: %s", exc)
-        finally:
-            browser.close()
-
-    if use_snapshot_diff:
-        merged = {**previous_snapshot, **current_snapshot}
-        _save_snapshot(merged)
-
-    logger.info("Mauritius MNS scraper: collected %d new records.", len(records))
     return records

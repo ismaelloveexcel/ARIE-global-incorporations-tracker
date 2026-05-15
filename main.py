@@ -88,11 +88,14 @@ def ingest(
     else:
         logger.info("DIFC connector skipped.")
 
-    # 3. Mauritius MNS (Playwright + snapshot diff)
+    # 3. Mauritius MNS (Playwright, date range on onlinesearch.mns.mu)
     if not skip_mauritius:
         logger.info("── Mauritius MNS connector ────────────────────────────")
         try:
-            mns_records = mns_connector.fetch_new_incorporations(date_from=date_from)
+            mns_records = mns_connector.fetch_new_incorporations(
+                date_from=date_from,
+                date_to=date_to,
+            )
             logger.info("Mauritius MNS: %d records ingested.", len(mns_records))
             records.extend(mns_records)
         except Exception as exc:
