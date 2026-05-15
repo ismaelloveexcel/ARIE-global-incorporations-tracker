@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arie Finance · Incorporation Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    
+    <div class="loading-overlay" id="loadingOverlay" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Fetching from Companies House…</p>
+    </div>
+
+    <header class="header">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <div>
+            <p class="brand-eyebrow">Arie Finance</p>
+            <h1>Incorporation Monitor</h1>
+            <p class="tagline">Onboarding intelligence · official UK register data</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <label class="field-inline">
+            <span>Incorporation date</span>
+            <input type="date" id="dateInput" />
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="demoMode" checked />
+            <span>Curated demo (top 25)</span>
+          </label>
+          <button type="button" class="btn btn-primary" id="refreshBtn">Refresh from API</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="positioning" id="positioningBar"></section>
+
+    <details class="roadmap roadmap-collapsible" id="roadmapSection">
+      <summary>Jurisdictions</summary>
+      <div class="roadmap-grid" id="roadmapGrid"></div>
+    </details>
+
+    <main class="main">
+      <section class="metrics" id="metrics" aria-label="Summary metrics"></section>
+      <p class="last-refreshed" id="lastRefreshed"></p>
+
+      <section class="filters panel">
+        <div class="quick-filters" id="quickFilters">
+          <span class="quick-label">Quick filters</span>
+          <button type="button" class="chip" data-preset="high">High priority</button>
+          <button type="button" class="chip" data-preset="fintech">Fintech / payments</button>
+          <button type="button" class="chip" data-preset="introducer">Introducers</button>
+          <button type="button" class="chip" data-preset="unassigned">Unassigned</button>
+          <button type="button" class="chip chip-ghost" data-preset="clear">Clear all</button>
+        </div>
+        <div class="filters-grid">
+          <label>
+            <span>Search</span>
+            <input type="search" id="filterSearch" placeholder="Company name…" />
+          </label>
+          <label>
+            <span>Min score</span>
+            <input type="number" id="filterMinScore" min="0" max="100" placeholder="0" />
+          </label>
+          <label>
+            <span>Priority</span>
+            <select id="filterPriority">
+              <option value="">All</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </label>
+          <label>
+            <span>Lead type</span>
+            <select id="filterLeadType">
+              <option value="">All</option>
+              <option value="direct">Direct</option>
+              <option value="introducer">Introducer</option>
+            </select>
+          </label>
+          <label>
+            <span>Assigned to</span>
+            <select id="filterAssigned">
+              <option value="">All</option>
+              <option value="__unassigned__">Unassigned</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head panel-head-row">
+          <div>
+            <h2>Lead pipeline</h2>
+            <p id="panelSubtitle">Click a row for full intelligence · Verify opens Companies House</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="exportBtn">Export view (CSV)</button>
+        </div>
+        <div class="table-wrap">
+          <table id="leadsTable">
+            <thead>
+              <tr>
+                <th data-sort="score" class="sortable">Score</th>
+                <th data-sort="priority" class="sortable">Priority</th>
+                <th data-sort="company_name" class="sortable">Company</th>
+                <th data-sort="incorporation_age_days" class="sortable">Age</th>
+                <th>Why this lead matters</th>
+                <th data-sort="lead_type" class="sortable">Type</th>
+                <th class="col-verify">Register</th>
+                <th data-sort="assigned_to" class="sortable">Assigned</th>
+              </tr>
+            </thead>
+            <tbody id="leadsBody">
+              <tr>
+                <td colspan="8" class="empty">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <aside class="detail-panel" id="detailPanel" hidden aria-label="Lead detail">
+      <div class="detail-header">
+        <h2 id="detailTitle">Lead detail</h2>
+        <button type="button" class="btn-close" id="detailClose" aria-label="Close">×</button>
+      </div>
+      <div class="detail-body" id="detailBody"></div>
+    </aside>
+    <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+
+    <div class="toast" id="toast" hidden role="status"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
