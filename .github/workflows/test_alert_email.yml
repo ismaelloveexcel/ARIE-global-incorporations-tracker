@@ -1,0 +1,28 @@
+name: Test alert email (Outlook SMTP)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send_test:
+    name: Send test email
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test via Outlook SMTP
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
+          tls: true
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: "✅ ARIE — Outlook alert test"
+          to: ismael@ariefinance.com
+          from: ${{ secrets.ALERT_EMAIL_FROM }}
+          body: |
+            This is a one-time test from GitHub Actions.
+
+            If you received this, ALERT_EMAIL_FROM and ALERT_EMAIL_PASSWORD are configured correctly for pipeline alerts.
+
+            You can delete this workflow file after confirming, or keep it to re-test SMTP anytime.
