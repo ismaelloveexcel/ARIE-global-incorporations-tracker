@@ -18,17 +18,17 @@ on:
         required: false
         default: "1"
       skip_difc:
-        description: "Skip DIFC scraper (true/false)"
+        description: "Skip DIFC scraper (true/false). Default true — DIFC connector not in use."
         required: false
-        default: "false"
+        default: "true"
       skip_mauritius:
         description: "Skip Mauritius MNS scraper (true/false)"
         required: false
         default: "false"
       dry_run:
-        description: "Dry run — parse and score only, no DB writes (true/false)"
+        description: "Dry run — CSV export only, no Supabase writes (true/false). Default true in CI."
         required: false
-        default: "false"
+        default: "true"
 
 jobs:
   pipeline:
@@ -72,13 +72,16 @@ jobs:
             LOOKBACK="${LOOKBACK:-1}"
             ARGS="$ARGS --lookback $LOOKBACK"
           fi
-          if [ "${{ github.event.inputs.skip_difc }}" = "true" ]; then
+          # Default on (scheduled runs have no inputs; empty ≠ "false")
+          SKIP_DIFC="${{ github.event.inputs.skip_difc }}"
+          if [ "$SKIP_DIFC" != "false" ]; then
             ARGS="$ARGS --skip-difc"
           fi
           if [ "${{ github.event.inputs.skip_mauritius }}" = "true" ]; then
             ARGS="$ARGS --skip-mauritius"
           fi
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+          if [ "$DRY_RUN" != "false" ]; then
             ARGS="$ARGS --dry-run"
           fi
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
