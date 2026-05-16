@@ -2,7 +2,8 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const PANEL_STATUSES = ["New", "Contacted", "Not Interested", "Converted"];
-const MU_DIRECTOR_MSG = "Director data not yet available for Mauritius companies";
+const MU_DIRECTOR_MSG =
+  "Director and PSC data is not yet available for Mauritius companies. This will be added when MNS API access is confirmed.";
 
 let team = [];
 let allLeads = [];
@@ -673,7 +674,25 @@ function renderDetailShell(lead) {
   );
 }
 
-async function loadDetailPeople(lead) {
+function renderEnrichmentInfoBox(message) {
+  return (
+    '<div class="enrichment-unavailable" role="status">' +
+    `<p>ℹ ${escapeHtml(message)}</p>` +
+    "</div>"
+  );
+}
+
+function renderEnrichmentUnavailable(message, leadId) {
+  return (
+    '<div class="enrichment-unavailable" role="status">' +
+    `<p>ℹ ${escapeHtml(message)}</p>` +
+    `<button type="button" class="btn btn-secondary btn-sm enrichment-retry" data-lead-id="${escapeHtml(leadId)}">Retry</button>` +
+    "</div>"
+  );
+}
+
+async function loadDetailPeople(lead, options = {}) {
+  const { refresh = false } = options;
   const lid = leadKey(lead);
   const date = getCurrentDate();
   const demo = $("#demoMode").checked;
@@ -681,22 +700,58 @@ async function loadDetailPeople(lead) {
   const pscEl = $("#detailPscSection");
 
   if (isMauritiusLead(lead)) {
-    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">${MU_DIRECTOR_MSG}</p>`;
-    pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">${MU_DIRECTOR_MSG}</p>`;
+    const info = renderEnrichmentInfoBox(MU_DIRECTOR_MSG);
+    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${info}`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${info}`;
     return;
   }
 
+  officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Loading…</p>`;
+  pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Loading…</p>`;
+
   try {
+    const refreshParam = refresh ? "&refresh=true" : "";
     const res = await fetch(
-      `/api/leads/${encodeURIComponent(lid)}/people?incorporation_date=${encodeURIComponent(date)}&demo=${demo}`
+      `/api/leads/${encodeURIComponent(lid)}/people?incorporation_date=${encodeURIComponent(date)}&demo=${demo}${refreshParam}`
     );
-    if (!res.ok) throw new Error("Could not load people");
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+
+    if (data.enrichment_status === "unavailable") {
+      const msg =
+        data.enrichment_message ||
+        "Director data temporarily unavailable — click to retry";
+      const box = renderEnrichmentUnavailable(msg, lid);
+      officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${box}`;
+      pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${box}`;
+      officersEl.querySelector(".enrichment-retry")?.addEventListener("click", () => {
+        loadDetailPeople(lead, { refresh: true });
+      });
+      return;
+    }
+
+    if (!res.ok) {
+      const msg = data.detail || "Director data temporarily unavailable — click to retry";
+      const box = renderEnrichmentUnavailable(msg, lid);
+      officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${box}`;
+      pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${box}`;
+      officersEl.querySelector(".enrichment-retry")?.addEventListener("click", () => {
+        loadDetailPeople(lead, { refresh: true });
+      });
+      return;
+    }
+
     officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${renderOfficersTable(data.officers || [])}`;
     pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${renderPscTable(data.psc || [])}`;
   } catch {
-    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Could not load officer data.</p>`;
-    pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Could not load PSC data.</p>`;
+    const box = renderEnrichmentUnavailable(
+      "Director data temporarily unavailable — click to retry",
+      lid
+    );
+    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${box}`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${box}`;
+    officersEl.querySelector(".enrichment-retry")?.addEventListener("click", () => {
+      loadDetailPeople(lead, { refresh: true });
+    });
   }
 }
 

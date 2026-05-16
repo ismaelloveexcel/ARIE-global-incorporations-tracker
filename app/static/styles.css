@@ -952,6 +952,29 @@ body.panel-open {
   border-bottom: none;
 }
 
+.enrichment-unavailable {
+  margin-top: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  background: #f4f5f7;
+  border: 1px solid #e2e5ea;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.enrichment-unavailable p {
+  margin: 0 0 0.5rem;
+}
+
+.enrichment-unavailable p:last-child {
+  margin-bottom: 0;
+}
+
+.enrichment-unavailable .enrichment-retry {
+  margin-top: 0.25rem;
+}
+
 .brief-block {
   font-size: 0.82rem;
   line-height: 1.45;

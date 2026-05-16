@@ -7,9 +7,11 @@ Ops view:    /dev  (not linked from user UI)
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -40,7 +42,35 @@ from uk_leads.pipeline_alerts import get_pipeline_alert_status
 
 STATIC = Path(__file__).parent / "static"
 
+logger = logging.getLogger(__name__)
+
+# In-memory TTL cache for Companies House people data (per lead_id)
+_people_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL_SECONDS = 3600
+
+_PEOPLE_UNAVAILABLE_MESSAGE = (
+    "Director data could not be retrieved at this time. Try again shortly."
+)
+_MU_PEOPLE_MESSAGE = (
+    "Director and PSC data is not yet available for Mauritius companies. "
+    "This will be added when MNS API access is confirmed."
+)
+
 app = FastAPI(title="Arie Incorporation Monitor", version="1.0.0")
+
+
+def _get_cached_people(lead_id: str) -> dict | None:
+    if lead_id not in _people_cache:
+        return None
+    timestamp, data = _people_cache[lead_id]
+    if time.time() - timestamp > _CACHE_TTL_SECONDS:
+        del _people_cache[lead_id]
+        return None
+    return data
+
+
+def _set_cached_people(lead_id: str, data: dict) -> None:
+    _people_cache[lead_id] = (time.time(), data)
 
 
 class AssignmentUpdate(BaseModel):
@@ -234,39 +264,80 @@ def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
 
 
 @app.get("/api/leads/{lead_id_key}/people")
-def api_lead_people(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True):
+def api_lead_people(
+    lead_id_key: str,
+    incorporation_date: str | None = None,
+    demo: bool = True,
+    refresh: bool = Query(False, description="Bypass cache and refetch from Companies House"),
+):
     lead = _find_lead(lead_id_key, incorporation_date, demo=demo)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+
     if (lead.get("source") or "").lower() != "companies_house":
         return {
             "officers": [],
             "psc": [],
             "strengths": lead.get("strengths", []),
             "cautions": lead.get("cautions", []),
-            "message": "Director data not yet available for Mauritius companies",
+            "source": "mauritius_mns",
+            "enrichment_status": "not_available",
+            "enrichment_message": _MU_PEOPLE_MESSAGE,
         }
 
+    if not refresh:
+        cached = _get_cached_people(lead_id_key)
+        if cached:
+            logger.debug(
+                "People cache hit for %s — skipping API call",
+                lead_id_key,
+            )
+            return cached
+
     if not os.environ.get("COMPANIES_HOUSE_API_KEY"):
-        raise HTTPException(status_code=503, detail="COMPANIES_HOUSE_API_KEY not set")
+        return {
+            "officers": [],
+            "psc": [],
+            "strengths": lead.get("strengths", []),
+            "cautions": lead.get("cautions", []),
+            "source": "companies_house",
+            "enrichment_status": "unavailable",
+            "enrichment_message": _PEOPLE_UNAVAILABLE_MESSAGE,
+        }
 
     from uk_leads.companies_house_people import fetch_people
     from uk_leads.signals import compute_signals
 
     num = lead.get("company_number") or lead_id_key
-    try:
-        people = fetch_people(num, lead_company_numbers={num})
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Companies House error: {exc}") from exc
+    people = fetch_people(num, lead_company_numbers={num})
+
+    if people.get("enrichment_status") == "unavailable":
+        return {
+            "officers": [],
+            "psc": [],
+            "strengths": lead.get("strengths", []),
+            "cautions": lead.get("cautions", []),
+            "source": "companies_house",
+            "enrichment_status": "unavailable",
+            "enrichment_message": _PEOPLE_UNAVAILABLE_MESSAGE,
+        }
 
     sig = compute_signals(
         lead,
         officer_count=len(people.get("officers") or []),
         director_signals=people.get("director_signals"),
     )
-    people["strengths"] = sig["strengths"]
-    people["cautions"] = sig["cautions"]
-    return people
+    result = {
+        "company_number": people.get("company_number"),
+        "officers": people.get("officers") or [],
+        "psc": people.get("psc") or [],
+        "strengths": sig["strengths"],
+        "cautions": sig["cautions"],
+        "source": "companies_house",
+        "enrichment_status": "ok",
+    }
+    _set_cached_people(lead_id_key, result)
+    return result
 
 
 @app.post("/api/leads/{lead_id_key}/brief")
