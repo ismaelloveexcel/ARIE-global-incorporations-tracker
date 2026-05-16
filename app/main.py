@@ -35,6 +35,7 @@ from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path, sca
 from uk_leads.dev_config import load_config, save_config
 from uk_leads.enrichment import enrich_rows
 from uk_leads.health import run_health_checks
+from uk_leads.pipeline_alerts import get_pipeline_alert_status
 
 STATIC = Path(__file__).parent / "static"
 
@@ -353,6 +354,11 @@ def api_dev_refresh_mauritius(incorporation_date: str | None = None):
         "stderr": proc.stderr,
         "success": proc.returncode == 0,
     }
+
+
+@app.get("/api/dev/pipeline-alerts")
+def api_dev_pipeline_alerts():
+    return get_pipeline_alert_status()
 
 
 @app.get("/api/dev/stats")

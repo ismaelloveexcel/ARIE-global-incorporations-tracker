@@ -39,6 +39,7 @@ function showSection(name) {
   const titles = {
     overview: "Overview",
     health: "System Health",
+    alerts: "Pipeline Alerts",
     roadmap: "Jurisdiction Roadmap",
     team: "Team & Assignment",
     controls: "Manual Controls",
@@ -47,6 +48,91 @@ function showSection(name) {
   $("#devSectionTitle").textContent = titles[name] || name;
   if (name === "health") runHealth();
   if (name === "overview") loadOverview();
+  if (name === "alerts") loadAlerts();
+}
+
+function formatRunWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toISOString().replace("T", " ").slice(0, 16);
+}
+
+function runResultLabel(run) {
+  if (!run) return "—";
+  if (run.status === "in_progress" || run.status === "queued") return "Running…";
+  if (run.conclusion === "success") return "Success";
+  if (run.conclusion === "failure") return "Failed";
+  if (run.conclusion === "cancelled") return "Cancelled";
+  return run.conclusion || run.status || "—";
+}
+
+function runResultClass(run) {
+  if (!run) return "";
+  if (run.conclusion === "success") return "ok";
+  if (run.conclusion === "failure") return "error";
+  if (run.status === "in_progress" || run.status === "queued") return "warning";
+  return "warning";
+}
+
+async function loadAlerts() {
+  const res = await fetch("/api/dev/pipeline-alerts");
+  const data = await res.json();
+  const setup = data.setup || {};
+
+  $("#alertsSummary").textContent = setup.summary || "";
+
+  $("#alertsNotifLink").href = data.links?.notification_settings || "#";
+  $("#alertsActionsLink").href = data.links?.actions || "#";
+
+  const latest = data.latest;
+  const lastOk = data.last_success;
+  const lastFail = data.last_failure;
+  let banner = "";
+  if (!data.api_ok) {
+    banner = `<p><strong>Could not load runs from GitHub.</strong> Open Actions manually — the setup steps below still apply.</p>`;
+  } else if (latest?.conclusion === "failure") {
+    banner = `<p class="banner-fail"><strong>Latest run failed</strong> — ${esc(formatRunWhen(latest.created_at))}. GitHub should email you if notifications are on. <a href="${esc(latest.html_url)}" target="_blank" rel="noopener">View run</a></p>`;
+  } else if (latest?.conclusion === "success") {
+    banner = `<p class="banner-ok"><strong>Latest run succeeded</strong> — ${esc(formatRunWhen(latest.created_at))}.</p>`;
+  } else if (latest) {
+    banner = `<p><strong>Latest run:</strong> ${esc(runResultLabel(latest))} (${esc(formatRunWhen(latest.created_at))}).</p>`;
+  }
+  if (lastOk && lastFail && lastOk.id !== lastFail.id) {
+    banner += `<p class="muted">Last success: ${esc(formatRunWhen(lastOk.created_at))} · Last failure: ${esc(formatRunWhen(lastFail.created_at))}</p>`;
+  }
+  $("#alertStatusBanner").innerHTML = banner;
+
+  $("#alertSetupSteps").innerHTML = (setup.steps || [])
+    .map(
+      (step, i) => `
+    <article class="alert-step">
+      <span class="alert-step-num">${i + 1}</span>
+      <div>
+        <strong>${esc(step.title)}</strong>
+        <p>${esc(step.detail)}</p>
+        <a href="${esc(step.url)}" target="_blank" rel="noopener">Open in GitHub →</a>
+      </div>
+    </article>`
+    )
+    .join("");
+
+  const runs = data.runs || [];
+  if (!runs.length) {
+    $("#pipelineRunsBody").innerHTML = `<tr><td colspan="5" class="muted">No recent runs found.</td></tr>`;
+    return;
+  }
+  $("#pipelineRunsBody").innerHTML = runs
+    .map((run) => {
+      const cls = runResultClass(run);
+      return `<tr>
+        <td>${esc(formatRunWhen(run.created_at))}</td>
+        <td>${esc(run.name || data.workflow_name)}</td>
+        <td>${esc(run.event || "—")}</td>
+        <td><span class="run-pill ${cls}">${esc(runResultLabel(run))}</span></td>
+        <td>${run.html_url ? `<a href="${esc(run.html_url)}" target="_blank" rel="noopener">Log</a>` : ""}</td>
+      </tr>`;
+    })
+    .join("");
 }
 
 function statusClass(st) {
@@ -241,6 +327,7 @@ function init() {
   $("#runHealthBtn").addEventListener("click", runHealth);
   $("#refreshUkBtn").addEventListener("click", refreshUk);
   $("#refreshMuBtn").addEventListener("click", refreshMu);
+  $("#refreshAlertsBtn").addEventListener("click", loadAlerts);
 
   $$(".pool-add .dev-btn").forEach((btn) => {
     btn.addEventListener("click", () => {

@@ -13,6 +13,7 @@
       <nav class="dev-nav">
         <button type="button" class="dev-nav-btn active" data-section="overview">Overview</button>
         <button type="button" class="dev-nav-btn" data-section="health">Health</button>
+        <button type="button" class="dev-nav-btn" data-section="alerts">Alerts</button>
         <button type="button" class="dev-nav-btn" data-section="roadmap">Roadmap</button>
         <button type="button" class="dev-nav-btn" data-section="team">Team</button>
         <button type="button" class="dev-nav-btn" data-section="controls">Controls</button>
@@ -44,6 +45,34 @@
         </div>
         <div class="health-grid" id="healthGrid"></div>
         <div class="health-fixes" id="healthFixes"></div>
+      </section>
+
+      <section class="dev-section" id="section-alerts">
+        <p class="dev-lead" id="alertsSummary"></p>
+        <div class="alert-status-banner" id="alertStatusBanner"></div>
+        <div class="alert-setup" id="alertSetupSteps"></div>
+        <div class="dev-toolbar">
+          <a class="dev-btn" id="alertsNotifLink" href="#" target="_blank" rel="noopener">Open GitHub notification settings</a>
+          <a class="dev-btn" id="alertsActionsLink" href="#" target="_blank" rel="noopener">Open Actions runs</a>
+          <button type="button" class="dev-btn" id="refreshAlertsBtn">Refresh runs</button>
+        </div>
+        <h2 class="alert-runs-title">Recent workflow runs</h2>
+        <div class="dev-table-wrap">
+          <table class="dev-table" id="pipelineRunsTable">
+            <thead>
+              <tr>
+                <th>When (UTC)</th>
+                <th>Workflow</th>
+                <th>Trigger</th>
+                <th>Result</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="pipelineRunsBody">
+              <tr><td colspan="5" class="muted">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="dev-section" id="section-roadmap">
