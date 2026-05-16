@@ -1,4 +1,4 @@
-name: Test alert email (SendGrid)
+name: Test alert email (Outlook)
 
 on:
   workflow_dispatch:
@@ -8,18 +8,18 @@ jobs:
     name: Send test email
     runs-on: ubuntu-latest
     steps:
-      - name: Send test via SendGrid
+      - name: Send test via Outlook SMTP
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.sendgrid.net
+          server_address: smtp.office365.com
           server_port: 587
           secure: false
-          username: apikey
-          password: ${{ secrets.SENDGRID_API_KEY }}
-          subject: "✅ ARIE — SendGrid alert test"
-          to: ismael@ariefinance.com
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: "✅ ARIE — Outlook alert test"
+          to: isudally@outlook.com
           from: ${{ secrets.ALERT_EMAIL_FROM }}
           body: |
-            This is a one-time test from GitHub Actions via SendGrid.
+            This is a one-time test from GitHub Actions.
 
-            If you received this, SENDGRID_API_KEY and ALERT_EMAIL_FROM are configured correctly for pipeline alerts.
+            If you received this, ALERT_EMAIL_FROM and ALERT_EMAIL_PASSWORD are configured correctly.

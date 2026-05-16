@@ -1,14 +1,10 @@
-# ─── ALERT SETUP (SendGrid) ───────────────────────────
-# 1. SendGrid → Settings → API Keys → Create (Mail Send permission)
-# 2. SendGrid → Settings → Sender Authentication → Verify Single Sender
-#    Use the same address as ALERT_EMAIL_FROM (e.g. ismael@ariefinance.com)
-# 3. GitHub → Settings → Secrets and variables → Actions:
+# ─── ALERT SETUP (Outlook) ────────────────────────────
+# GitHub → Settings → Secrets and variables → Actions:
 #
-#    SENDGRID_API_KEY   SendGrid API key (starts with SG.)
-#    ALERT_EMAIL_FROM   Verified sender address in SendGrid
-#                       e.g. ismael@ariefinance.com
+#   ALERT_EMAIL_FROM     isudally@outlook.com
+#   ALERT_EMAIL_PASSWORD Outlook password (or app password if MFA is on)
 #
-# Alerts are delivered to: ismael@ariefinance.com
+# Alerts are delivered to: isudally@outlook.com
 # ─────────────────────────────────────────────────────
 
 name: Incorporation Intelligence Engine — Daily Pipeline
@@ -123,13 +119,13 @@ jobs:
         if: failure()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.sendgrid.net
+          server_address: smtp.office365.com
           server_port: 587
           secure: false
-          username: apikey
-          password: ${{ secrets.SENDGRID_API_KEY }}
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           subject: "🔴 ARIE Pipeline Failed — ${{ steps.alert_ctx.outputs.run_date }} — ${{ job.name }}"
-          to: ismael@ariefinance.com
+          to: isudally@outlook.com
           from: ${{ secrets.ALERT_EMAIL_FROM }}
           body: |
             The ARIE incorporation pipeline failed.
@@ -158,13 +154,13 @@ jobs:
         if: success() && github.event_name == 'schedule' && steps.alert_ctx.outputs.is_monday == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.sendgrid.net
+          server_address: smtp.office365.com
           server_port: 587
           secure: false
-          username: apikey
-          password: ${{ secrets.SENDGRID_API_KEY }}
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           subject: "✅ ARIE Pipeline — Weekly OK — ${{ steps.alert_ctx.outputs.run_date }}"
-          to: ismael@ariefinance.com
+          to: isudally@outlook.com
           from: ${{ secrets.ALERT_EMAIL_FROM }}
           body: |
             The scheduled ARIE incorporation pipeline completed successfully (Monday weekly check).
