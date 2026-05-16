@@ -18,6 +18,7 @@ pip-delete-this-directory.txt
 
 # Pipeline outputs
 exports/
+exports/debug/
 snapshots/
 data/
 

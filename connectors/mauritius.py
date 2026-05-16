@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
@@ -21,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 _SOURCE = "mauritius_mns"
 _BASE_URL = "https://onlinesearch.mns.mu/"
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 10
+ATTEMPT_TIMEOUT_MS = 90_000
+DEBUG_DIR = Path("exports") / "debug"
 
 _HEADER_MAP = {
     "name": "company_name",
@@ -332,6 +338,8 @@ def _scrape_date_range(page: Page, date_from: str, date_to: str) -> list[Company
         try:
             raw_rows = _parse_results_table(page)
         except Exception as exc:
+            if page_num == 1:
+                raise
             logger.warning("Mauritius results table parse failed on page %d: %s", page_num, exc)
             break
 
@@ -357,6 +365,68 @@ def _scrape_date_range(page: Page, date_from: str, date_to: str) -> list[Company
     return records
 
 
+def _debug_artifact_paths() -> tuple[Path, Path]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    base = DEBUG_DIR / f"mauritius_fail_{timestamp}"
+    return base.with_suffix(".png"), base.with_suffix(".html")
+
+
+def _save_failure_artifacts(
+    page: Page | None,
+    screenshot_path: Path,
+    html_path: Path,
+) -> tuple[str | None, str | None]:
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    saved_screenshot: str | None = None
+    saved_html: str | None = None
+    if page is None:
+        return None, None
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        saved_screenshot = str(screenshot_path)
+        logger.error(
+            "Mauritius scraper failed — screenshot saved: %s",
+            saved_screenshot,
+        )
+    except Exception as exc:
+        logger.warning("Could not save Mauritius failure screenshot: %s", exc)
+    try:
+        html_path.write_text(page.content(), encoding="utf-8")
+        saved_html = str(html_path)
+        logger.error(
+            "Mauritius scraper failed — HTML saved: %s",
+            saved_html,
+        )
+    except Exception as exc:
+        logger.warning("Could not save Mauritius failure HTML: %s", exc)
+    return saved_screenshot, saved_html
+
+
+def _run_single_attempt(
+    date_from: str,
+    date_to: str,
+    screenshot_path: Path,
+    html_path: Path,
+) -> list[CompanyRecord]:
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        )
+        page = context.new_page()
+        page.set_default_timeout(ATTEMPT_TIMEOUT_MS)
+        try:
+            return _scrape_date_range(page, date_from, date_to)
+        except Exception:
+            _save_failure_artifacts(page, screenshot_path, html_path)
+            raise
+        finally:
+            browser.close()
+
+
 def fetch_new_incorporations(
     date_from: str,
     date_to: str | None = None,
@@ -372,34 +442,49 @@ def fetch_new_incorporations(
     end = date_to or date_from
     logger.info("Mauritius scraper: %s → %s", date_from, end)
 
-    records: list[CompanyRecord] = []
+    last_exception: Exception | None = None
+    last_screenshot: str | None = None
+    last_html: str | None = None
 
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    for attempt in range(1, MAX_RETRIES + 1):
+        logger.info("Mauritius scraper attempt %d of %d", attempt, MAX_RETRIES)
+        screenshot_path, html_path = _debug_artifact_paths()
+        try:
+            records = _run_single_attempt(date_from, end, screenshot_path, html_path)
+            if records:
+                logger.info("Mauritius scraper: collected %d records.", len(records))
+            else:
+                logger.info(
+                    "Mauritius scraper: confirmed empty — 0 GBC/Authorised Company "
+                    "rows for %s → %s (search completed successfully)",
+                    date_from,
+                    end,
                 )
+            return records
+        except Exception as exc:
+            last_exception = exc
+            if screenshot_path.exists():
+                last_screenshot = str(screenshot_path)
+            if html_path.exists():
+                last_html = str(html_path)
+            logger.error(
+                "Mauritius scraper attempt %d failed: %s",
+                attempt,
+                exc,
             )
-            page = context.new_page()
-            try:
-                records = _scrape_date_range(page, date_from, end)
-            except Exception as exc:
-                logger.error("Mauritius scraper error: %s", exc)
-            finally:
-                browser.close()
-    except Exception as exc:
-        logger.error("Mauritius Playwright failed to start: %s", exc)
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY_SECONDS)
 
-    if not records:
-        logger.warning(
-            "Mauritius scraper: zero GBC/Authorised Company rows for %s → %s",
-            date_from,
-            end,
-        )
-    else:
-        logger.info("Mauritius scraper: collected %d records.", len(records))
-
-    return records
+    logger.error(
+        "Mauritius scraper FAILED after %d attempts | "
+        "date: %s | last_error: %s | "
+        "screenshot: %s | html: %s",
+        MAX_RETRIES,
+        date_from,
+        str(last_exception),
+        last_screenshot or "not saved",
+        last_html or "not saved",
+    )
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError("Mauritius scraper failed with no exception recorded")
