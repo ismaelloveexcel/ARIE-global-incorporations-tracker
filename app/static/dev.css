@@ -205,6 +205,13 @@
 .alert-status-banner p { margin: 0.35rem 0; }
 .alert-status-banner .banner-ok { color: var(--dev-ok); }
 .alert-status-banner .banner-fail { color: var(--dev-err); }
+.alert-status-banner .banner-warn { color: var(--dev-warn); }
+.alert-status-banner code {
+  font-size: 0.78rem;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
 .alert-status-banner a { color: var(--dev-accent); }
 
 .alert-setup {

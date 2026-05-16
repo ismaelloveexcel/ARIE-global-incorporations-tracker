@@ -27,8 +27,13 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime, timedelta
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+
+import requests
 
 from dotenv import load_dotenv
 
@@ -42,6 +47,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 
+CONNECTOR_TIMEOUT_SECONDS = 120
+RUN_SUMMARY_PATH = Path("exports") / "run_summary.json"
+_CH_PROBE_URL = (
+    "https://api.company-information.service.gov.uk/advanced-search/companies"
+)
+
 # ─── internal modules ─────────────────────────────────────────────────────────
 import connectors.companies_house as ch_connector
 import connectors.difc as difc_connector
@@ -52,31 +63,300 @@ from deduplication.matcher import Deduplicator
 from normalization.schema import CompanyRecord
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ingest
+# Connector classification (Fix 2)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def classify_connector_result(
+    source: str,
+    records: list[Any] | None,
+    exception: BaseException | None,
+    http_status: int | None,
+    duration_seconds: float,
+    run_date: str,
+) -> tuple[str, str | None]:
+    """
+    Classify a connector run as ERROR, EMPTY, or OK.
+
+    Returns (outcome, error_message).
+    """
+    _ = source, run_date
+
+    if duration_seconds > CONNECTOR_TIMEOUT_SECONDS:
+        return "ERROR", f"Connector timed out after {CONNECTOR_TIMEOUT_SECONDS}s"
+
+    if exception is not None:
+        if http_status is None and isinstance(exception, requests.HTTPError):
+            resp = exception.response
+            http_status = resp.status_code if resp is not None else None
+        return "ERROR", str(exception)
+
+    if records is None:
+        return "ERROR", "Connector returned no result (internal failure)"
+
+    if http_status == 401:
+        return "ERROR", "API key invalid or expired"
+    if http_status == 429:
+        return "ERROR", "Rate limit hit"
+    if http_status is not None and http_status >= 500:
+        return "ERROR", f"Server error (HTTP {http_status})"
+
+    if http_status is not None and http_status not in (200, None):
+        if http_status >= 400:
+            return "ERROR", f"HTTP {http_status}"
+
+    if len(records) == 0:
+        return "EMPTY", None
+
+    return "OK", None
+
+
+def _http_status_message(status: int) -> str:
+    if status == 401:
+        return "API key invalid or expired"
+    if status == 429:
+        return "Rate limit hit"
+    if status >= 500:
+        return f"Server error (HTTP {status})"
+    return f"HTTP {status}"
+
+
+def _probe_companies_house_http_status(date_from: str, date_to: str) -> int | None:
+    """Single-page probe when CH returns zero rows (connector may swallow HTTP errors)."""
+    api_key = os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        resp = requests.get(
+            _CH_PROBE_URL,
+            auth=(api_key, ""),
+            params={
+                "incorporated_from": date_from,
+                "incorporated_to": date_to,
+                "size": 1,
+                "start_index": 0,
+            },
+            timeout=30,
+        )
+        return resp.status_code
+    except requests.RequestException:
+        return None
+
+
+def _run_connector_timed(fn, *args, **kwargs):
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(fn, *args, **kwargs)
+        return future.result(timeout=CONNECTOR_TIMEOUT_SECONDS)
+
+
+def _connector_entry(
+    outcome: str,
+    records: list[Any] | None,
+    error_message: str | None,
+    http_status: int | None,
+    duration_seconds: float,
+) -> dict:
+    count = len(records) if records is not None else 0
+    return {
+        "outcome": outcome,
+        "record_count": count,
+        "error_message": error_message,
+        "http_status": http_status,
+        "duration_seconds": round(duration_seconds, 1),
+    }
+
+
+def _log_connector_outcome(
+    source: str,
+    outcome: str,
+    error_message: str | None,
+    record_count: int,
+    run_date: str,
+) -> None:
+    if outcome == "ERROR":
+        logger.error(
+            "CONNECTOR ERROR [%s]: %s — this is NOT a quiet day, "
+            "the connector failed. Check API key / site availability.",
+            source,
+            error_message or "unknown error",
+        )
+    elif outcome == "EMPTY":
+        logger.info(
+            "CONNECTOR EMPTY [%s]: 0 records — connector ran "
+            "successfully, no GBC/AC incorporated on %s.",
+            source,
+            run_date,
+        )
+    else:
+        logger.info("CONNECTOR OK [%s]: %d records returned.", source, record_count)
+
+
+def compute_pipeline_outcome(connectors: dict[str, dict]) -> tuple[str, str]:
+    if not connectors:
+        return "FAILED", "No connectors ran."
+
+    outcomes = [c["outcome"] for c in connectors.values()]
+    has_ok = "OK" in outcomes
+    has_empty = "EMPTY" in outcomes
+    has_error = "ERROR" in outcomes
+
+    if all(o == "ERROR" for o in outcomes):
+        return "FAILED", "All connectors failed — check API keys and site availability."
+
+    if has_error and (has_ok or has_empty):
+        parts = []
+        for name, c in connectors.items():
+            label = "Companies House" if name == "companies_house" else "Mauritius MNS"
+            if c["outcome"] == "OK":
+                parts.append(f"{label}: OK ({c['record_count']} records)")
+            elif c["outcome"] == "EMPTY":
+                parts.append(f"{label}: quiet day (0 records)")
+            elif c["outcome"] == "ERROR":
+                parts.append(f"{label}: ERROR — {c.get('error_message') or 'failed'}")
+        return "PARTIAL", "; ".join(parts)
+
+    if all(o == "EMPTY" for o in outcomes):
+        return (
+            "ALL_EMPTY",
+            "Both connectors ran successfully. UK: 0 · MU: 0 — genuine quiet day.",
+        )
+
+    notes_parts = []
+    ch = connectors.get("companies_house")
+    mu = connectors.get("mauritius_mns")
+    if mu and mu.get("outcome") == "EMPTY":
+        notes_parts.append("Mauritius returned 0 — genuine quiet day, no error")
+    if ch and ch.get("outcome") == "EMPTY":
+        notes_parts.append("Companies House returned 0 — genuine quiet day, no error")
+    return "OK", notes_parts[0] if len(notes_parts) == 1 else "Pipeline completed successfully."
+
+
+def write_run_summary(
+    run_date: str,
+    connectors: dict[str, dict],
+    pipeline_outcome: str,
+    notes: str,
+    total_records: int,
+) -> Path:
+    RUN_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_date": run_date,
+        "run_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "connectors": connectors,
+        "total_records": total_records,
+        "pipeline_outcome": pipeline_outcome,
+        "notes": notes,
+    }
+    with RUN_SUMMARY_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    logger.info("Run summary written to %s", RUN_SUMMARY_PATH)
+    return RUN_SUMMARY_PATH
+
+
+def _ingest_companies_house(date_from: str, date_to: str, run_date: str) -> tuple[list[CompanyRecord], dict]:
+    logger.info("── Companies House connector ──────────────────────────")
+    exc: BaseException | None = None
+    http_status: int | None = None
+    records: list[CompanyRecord] | None = None
+    started = time.perf_counter()
+
+    try:
+        records = _run_connector_timed(
+            ch_connector.fetch_new_incorporations,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except FuturesTimeoutError:
+        exc = TimeoutError(f"Timed out after {CONNECTOR_TIMEOUT_SECONDS}s")
+    except requests.HTTPError as err:
+        exc = err
+        http_status = err.response.status_code if err.response is not None else None
+    except Exception as err:
+        exc = err
+
+    duration = time.perf_counter() - started
+
+    if records is not None and len(records) == 0 and exc is None:
+        if not os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip():
+            http_status = http_status or 401
+            exc = exc or RuntimeError("COMPANIES_HOUSE_API_KEY not set")
+        else:
+            probed = _probe_companies_house_http_status(date_from, date_to)
+            if probed is not None:
+                http_status = probed
+                if probed != 200:
+                    exc = RuntimeError(_http_status_message(probed))
+
+    outcome, error_message = classify_connector_result(
+        "companies_house",
+        records,
+        exc,
+        http_status,
+        duration,
+        run_date,
+    )
+    _log_connector_outcome(
+        "companies_house",
+        outcome,
+        error_message,
+        len(records) if records is not None else 0,
+        run_date,
+    )
+    entry = _connector_entry(outcome, records, error_message, http_status, duration)
+    return records or [], entry
+
+
+def _ingest_mauritius(date_from: str, date_to: str, run_date: str) -> tuple[list[CompanyRecord], dict]:
+    logger.info("── Mauritius MNS connector ────────────────────────────")
+    exc: BaseException | None = None
+    records: list[CompanyRecord] | None = None
+    started = time.perf_counter()
+
+    try:
+        records = _run_connector_timed(
+            mns_connector.fetch_new_incorporations,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except FuturesTimeoutError:
+        exc = TimeoutError(f"Timed out after {CONNECTOR_TIMEOUT_SECONDS}s")
+    except Exception as err:
+        exc = err
+
+    duration = time.perf_counter() - started
+    outcome, error_message = classify_connector_result(
+        "mauritius_mns",
+        records,
+        exc,
+        None,
+        duration,
+        run_date,
+    )
+    _log_connector_outcome(
+        "mauritius_mns",
+        outcome,
+        error_message,
+        len(records) if records is not None else 0,
+        run_date,
+    )
+    entry = _connector_entry(outcome, records, error_message, None, duration)
+    return records or [], entry
+
 
 def ingest(
     date_from: str,
     date_to: str,
     skip_difc: bool = False,
     skip_mauritius: bool = False,
-) -> list[CompanyRecord]:
-    """Run all connectors and return the combined list of records."""
+) -> tuple[list[CompanyRecord], dict[str, dict]]:
+    """Run connectors and return combined records plus per-connector summary entries."""
     records: list[CompanyRecord] = []
+    connectors: dict[str, dict] = {}
+    run_date = date_to
 
-    # 1. Companies House (UK)
-    logger.info("── Companies House connector ──────────────────────────")
-    try:
-        ch_records = ch_connector.fetch_new_incorporations(
-            date_from=date_from,
-            date_to=date_to,
-        )
-        logger.info("Companies House: %d records ingested.", len(ch_records))
-        records.extend(ch_records)
-    except Exception as exc:
-        logger.error("Companies House connector failed: %s", exc)
+    ch_records, ch_entry = _ingest_companies_house(date_from, date_to, run_date)
+    records.extend(ch_records)
+    connectors["companies_house"] = ch_entry
 
-    # 2. DIFC (Playwright)
     if not skip_difc:
         logger.info("── DIFC connector ─────────────────────────────────────")
         try:
@@ -88,22 +368,14 @@ def ingest(
     else:
         logger.info("DIFC connector skipped.")
 
-    # 3. Mauritius MNS (Playwright, date range on onlinesearch.mns.mu)
     if not skip_mauritius:
-        logger.info("── Mauritius MNS connector ────────────────────────────")
-        try:
-            mns_records = mns_connector.fetch_new_incorporations(
-                date_from=date_from,
-                date_to=date_to,
-            )
-            logger.info("Mauritius MNS: %d records ingested.", len(mns_records))
-            records.extend(mns_records)
-        except Exception as exc:
-            logger.error("Mauritius MNS connector failed: %s", exc)
+        mns_records, mns_entry = _ingest_mauritius(date_from, date_to, run_date)
+        records.extend(mns_records)
+        connectors["mauritius_mns"] = mns_entry
     else:
         logger.info("Mauritius MNS connector skipped.")
 
-    return records
+    return records, connectors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,18 +475,18 @@ def run_pipeline(
     skip_difc: bool = False,
     skip_mauritius: bool = False,
     dry_run: bool = False,
-) -> list[CompanyRecord]:
+) -> int:
     """
     Full pipeline: ingest → score → deduplicate → persist → export.
 
-    Returns the list of processed CompanyRecord objects.
+    Returns process exit code (0 success, 1 failed connectors).
     """
     logger.info(
         "Pipeline started  [%s → %s] dry_run=%s", date_from, date_to, dry_run
     )
 
     # 1. Ingest
-    records = ingest(
+    records, connector_entries = ingest(
         date_from=date_from,
         date_to=date_to,
         skip_difc=skip_difc,
@@ -222,9 +494,34 @@ def run_pipeline(
     )
     logger.info("Total records ingested: %d", len(records))
 
+    pipeline_outcome, notes = compute_pipeline_outcome(connector_entries)
+    write_run_summary(
+        run_date=date_to,
+        connectors=connector_entries,
+        pipeline_outcome=pipeline_outcome,
+        notes=notes,
+        total_records=len(records),
+    )
+
+    if pipeline_outcome == "FAILED":
+        logger.error("Pipeline outcome: FAILED — %s", notes)
+        return 1
+
+    if pipeline_outcome == "PARTIAL":
+        logger.warning(
+            "WARNING: pipeline completed with partial data — "
+            "one or more connectors failed. Check exports/run_summary.json. %s",
+            notes,
+        )
+    elif pipeline_outcome == "ALL_EMPTY":
+        logger.info("Pipeline outcome: ALL_EMPTY — %s", notes)
+    else:
+        logger.info("Pipeline outcome: OK — %s", notes)
+
     if not records:
-        logger.info("No records to process.  Pipeline complete.")
-        return records
+        logger.info("No records to process after ingest.")
+        export_csv(records, run_date=date_to)
+        return 0
 
     # 2. Score
     score_records(records)
@@ -247,7 +544,7 @@ def run_pipeline(
     export_csv(records, run_date=date_to)
 
     logger.info("Pipeline complete.  %d records processed.", len(records))
-    return records
+    return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -302,13 +599,14 @@ def main() -> None:
         date_to = (today - timedelta(days=1)).isoformat()
         date_from = (today - timedelta(days=args.lookback)).isoformat()
 
-    run_pipeline(
+    exit_code = run_pipeline(
         date_from=date_from,
         date_to=date_to,
         skip_difc=args.skip_difc,
         skip_mauritius=args.skip_mauritius,
         dry_run=args.dry_run,
     )
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

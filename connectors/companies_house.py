@@ -24,7 +24,6 @@ import logging
 import os
 import time
 from datetime import date, timedelta
-from typing import Generator
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -34,11 +33,45 @@ from normalization.schema import CompanyRecord
 
 logger = logging.getLogger(__name__)
 
+FINANCIAL_SIC_CODES = [
+    # Holding companies
+    "64201", "64202", "64203", "64204", "64205", "64209",
+    # Investment vehicles
+    "64301", "64302", "64303", "64304", "64305", "64306",
+    # Fund management
+    "66300",
+    # Financial services / credit
+    "64910", "64921", "64922", "64929",
+    "64991", "64992", "64999",
+    # Insurance
+    "65110", "65120", "65201", "65202", "65203",
+    "65204", "65205", "65206", "65209",
+    # Auxiliary financial services
+    "66110", "66120", "66190",
+    "66210", "66220", "66290",
+    # Banking
+    "64110", "64191", "64192",
+    # Head offices (international groups)
+    "70100",
+    # Financial management / management companies
+    "70221",
+    # Fintech / payments software only
+    "62011", "62012",
+]
+
 _BASE_URL = "https://api.company-information.service.gov.uk"
 _SEARCH_PATH = "/advanced-search/companies"
 _PAGE_SIZE = 100          # max items per page (API cap)
 _RATE_LIMIT_DELAY = 0.5   # seconds between requests (600 req/min limit)
 _SOURCE = "companies_house"
+
+
+def _is_financial_company(record: dict) -> bool:
+    sic_codes = record.get("sic_codes", []) or []
+    return any(
+        code in FINANCIAL_SIC_CODES
+        for code in sic_codes
+    )
 
 
 def _build_session() -> requests.Session:
@@ -66,7 +99,8 @@ def _fetch_page(
     params = {
         "incorporated_from": date_from,
         "incorporated_to": date_to,
-        "size": _PAGE_SIZE,
+        "sic_codes": ",".join(FINANCIAL_SIC_CODES),
+        "size": 100,
         "start_index": start_index,
     }
     url = f"{_BASE_URL}{_SEARCH_PATH}"
@@ -116,6 +150,7 @@ def fetch_new_incorporations(
 
     session = _build_session()
     records: list[CompanyRecord] = []
+    total_fetched = 0
     start_index = 0
 
     while True:
@@ -129,7 +164,9 @@ def fetch_new_incorporations(
         total_results = data.get("hits") or data.get("total_results") or len(items)
 
         for item in items:
-            records.append(_parse_record(item))
+            total_fetched += 1
+            if _is_financial_company(item):
+                records.append(_parse_record(item))
 
         fetched_so_far = start_index + len(items)
         logger.debug(
@@ -145,5 +182,12 @@ def fetch_new_incorporations(
         start_index += _PAGE_SIZE
         time.sleep(_RATE_LIMIT_DELAY)
 
-    logger.info("Companies House: fetched %d records.", len(records))
+    logger.info(
+        "Companies House: %d from API → %d after "
+        "financial SIC filter (date: %s to %s)",
+        total_fetched,
+        len(records),
+        date_from,
+        date_to,
+    )
     return records

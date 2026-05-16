@@ -9,6 +9,7 @@ import requests
 
 from uk_leads.core import csv_path_for_date
 from uk_leads.data_loader import mauritius_export_stats, pipeline_export_path
+from uk_leads.run_summary import last_run_for_health
 
 CH_TEST_URL = "https://api.company-information.service.gov.uk/search/companies?q=test&items_per_page=1"
 
@@ -239,4 +240,9 @@ def run_health_checks(target_date: str | None = None) -> dict:
         }
     )
 
-    return {"checked_at": checked_at, "target_date": d, "checks": checks}
+    return {
+        "checked_at": checked_at,
+        "target_date": d,
+        "checks": checks,
+        "last_run": last_run_for_health(),
+    }

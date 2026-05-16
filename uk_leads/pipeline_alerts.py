@@ -6,6 +6,8 @@ import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from uk_leads.run_summary import last_run_for_health, load_run_summary
+
 DEFAULT_REPO = "ismaelloveexcel/ARIE-global-incorporations-tracker"
 WORKFLOW_NAME = "Incorporation Intelligence Engine — Daily Pipeline"
 
@@ -51,10 +53,13 @@ def get_pipeline_alert_status() -> dict:
             }
         )
 
+    summary = load_run_summary()
     return {
         "method": "github_notifications",
         "repo": repo,
         "workflow_name": WORKFLOW_NAME,
+        "last_run": last_run_for_health(),
+        "run_summary": summary,
         "setup": {
             "summary": (
                 "When the daily GitHub workflow fails, GitHub emails the address on "

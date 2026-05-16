@@ -74,6 +74,44 @@ function runResultClass(run) {
   return "warning";
 }
 
+function formatSummaryDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function renderLastRunSummary(lastRun, actionsUrl) {
+  if (!lastRun) {
+    return `<p class="muted">No pipeline run summary yet. Run <code>python main.py --date YYYY-MM-DD --skip-difc --dry-run</code> to create exports/run_summary.json.</p>`;
+  }
+  const displayDate = formatSummaryDate(lastRun.date);
+  const ch = lastRun.companies_house || {};
+  const mu = lastRun.mauritius_mns || {};
+  const chN = ch.record_count ?? 0;
+  const muN = mu.record_count ?? 0;
+  const outcome = lastRun.pipeline_outcome;
+
+  if (outcome === "OK") {
+    const muNote = mu.outcome === "EMPTY" ? " (quiet day)" : "";
+    return `<p class="banner-ok">✅ <strong>Last run — ${esc(displayDate)}</strong> — UK: ${chN} · MU: ${muN}${esc(muNote)}</p>`;
+  }
+  if (outcome === "ALL_EMPTY") {
+    return `<p class="banner-ok">ℹ️ <strong>Last run — ${esc(displayDate)}</strong> — No incorporations today<br><span class="muted">Both connectors ran successfully. UK: 0 · MU: 0 — genuine quiet day.</span></p>`;
+  }
+  if (outcome === "PARTIAL") {
+    return `<p class="banner-warn">⚠️ <strong>Last run — ${esc(displayDate)}</strong> — PARTIAL<br>
+      Companies House: ${esc(ch.outcome || "—")} (${chN} records)${ch.error_message ? ` — ${esc(ch.error_message)}` : ""}<br>
+      Mauritius: ${esc(mu.outcome || "—")} (${muN} records)${mu.error_message ? ` — ${esc(mu.error_message)}` : ""}<br>
+      <span class="muted">Action: check API key / site availability. <a href="${esc(actionsUrl)}" target="_blank" rel="noopener">GitHub Actions</a></span></p>`;
+  }
+  if (outcome === "FAILED") {
+    return `<p class="banner-fail">🔴 <strong>Last run — ${esc(displayDate)}</strong> — FAILED<br>
+      Both connectors failed.<br>
+      <span class="muted">Action: check GitHub Actions logs immediately. <a href="${esc(actionsUrl)}" target="_blank" rel="noopener">Open Actions →</a></span></p>`;
+  }
+  return `<p><strong>Last run — ${esc(displayDate)}</strong> — ${esc(outcome || "unknown")}</p>`;
+}
+
 async function loadAlerts() {
   const res = await fetch("/api/dev/pipeline-alerts");
   const data = await res.json();
@@ -84,10 +122,13 @@ async function loadAlerts() {
   $("#alertsNotifLink").href = data.links?.notification_settings || "#";
   $("#alertsActionsLink").href = data.links?.actions || "#";
 
+  const actionsUrl = data.links?.actions || "#";
+  const lastRunBlock = renderLastRunSummary(data.last_run, actionsUrl);
+
   const latest = data.latest;
   const lastOk = data.last_success;
   const lastFail = data.last_failure;
-  let banner = "";
+  let banner = lastRunBlock;
   if (!data.api_ok) {
     banner = `<p><strong>Could not load runs from GitHub.</strong> Open Actions manually — the setup steps below still apply.</p>`;
   } else if (latest?.conclusion === "failure") {
