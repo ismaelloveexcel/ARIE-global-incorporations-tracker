@@ -378,7 +378,9 @@ function init() {
   });
 
   loadConfig().then(() => {
-    showSection("overview");
+    const initial =
+      location.hash === "#alerts" ? "alerts" : "overview";
+    showSection(initial);
   });
 }
 

@@ -35,6 +35,7 @@ from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path, sca
 from uk_leads.dev_config import load_config, save_config
 from uk_leads.enrichment import enrich_rows
 from uk_leads.health import run_health_checks
+from uk_leads.data_status import get_data_status
 from uk_leads.pipeline_alerts import get_pipeline_alert_status
 
 STATIC = Path(__file__).parent / "static"
@@ -132,6 +133,19 @@ def _package_response(
 @app.get("/api/available-dates")
 def api_available_dates(demo: bool = True):
     return scan_available_dates(demo=demo)
+
+
+@app.get("/api/data-status")
+def api_data_status(
+    target_date: str | None = Query(None, alias="date"),
+    demo: bool = True,
+):
+    d = target_date or (date.today()).isoformat()
+    try:
+        date.fromisoformat(d)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date; use YYYY-MM-DD") from exc
+    return get_data_status(d, demo=demo)
 
 
 @app.get("/api/meta")

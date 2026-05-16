@@ -16,6 +16,7 @@ let dateDetails = [];
 let currentDate = "";
 let openLeadId = null;
 let detailLead = null;
+let bannerHideTimer = null;
 
 function escapeHtml(s) {
   const d = document.createElement("div");
@@ -206,18 +207,79 @@ function renderMetrics(payload) {
     sourceSub.hidden = true;
   }
 
-  const muNotice = $("#mauritiusMissingNotice");
-  if (meta.mauritius_export_missing) {
-    const d = payload.incorporation_date;
-    $("#mauritiusMissingText").textContent =
-      `⚠ Mauritius data not available for ${d} — run the pipeline for this date to include Mauritius leads`;
-    const cmd = `python main.py --date ${d} --skip-difc`;
-    $("#muPipelineCmd").textContent = cmd;
-    $("#mauritiusMissingHint").hidden = false;
-    muNotice.hidden = false;
-  } else {
-    muNotice.hidden = true;
-    $("#mauritiusMissingHint").hidden = true;
+  $("#mauritiusMissingNotice").hidden = true;
+}
+
+let copyCmdTimer = null;
+
+function renderDataStatusBanner(status) {
+  const el = $("#dataStatusBanner");
+  if (bannerHideTimer) {
+    clearTimeout(bannerHideTimer);
+    bannerHideTimer = null;
+  }
+  const banner = status?.banner;
+  if (!banner || banner.type === "none") {
+    el.hidden = true;
+    el.innerHTML = "";
+    el.className = "data-status-banner";
+    return;
+  }
+
+  const type = banner.type;
+  const icon = type === "red" ? "🔴" : type === "amber" ? "⚠" : "✅";
+  el.className = `data-status-banner data-status-banner--${type}`;
+  el.hidden = false;
+
+  let actions = "";
+  if (banner.show_alerts_link) {
+    actions += ` <a class="data-status-link" href="/dev#alerts" target="_blank" rel="noopener">Open Alerts →</a>`;
+  }
+  if (banner.pipeline_command) {
+    const cmd = escapeHtml(banner.pipeline_command);
+    actions += ` <span class="data-status-cmd-wrap"><code class="data-status-cmd">${cmd}</code> <button type="button" class="data-status-copy">Copy</button></span>`;
+  }
+
+  el.innerHTML = `<p class="data-status-text">${icon} ${escapeHtml(banner.message)}${actions}</p>`;
+
+  const copyBtn = el.querySelector(".data-status-copy");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      const raw = banner.pipeline_command;
+      try {
+        await navigator.clipboard.writeText(raw);
+        copyBtn.textContent = "Copied ✓";
+        clearTimeout(copyCmdTimer);
+        copyCmdTimer = setTimeout(() => {
+          copyBtn.textContent = "Copy";
+        }, 2000);
+      } catch {
+        showToast("Could not copy", true);
+      }
+    });
+  }
+
+  if (banner.auto_hide_seconds) {
+    bannerHideTimer = setTimeout(() => {
+      el.hidden = true;
+      bannerHideTimer = null;
+    }, banner.auto_hide_seconds * 1000);
+  }
+}
+
+async function fetchDataStatus() {
+  const date = getCurrentDate();
+  if (!date) return;
+  const demo = $("#demoMode").checked;
+  try {
+    const res = await fetch(
+      `/api/data-status?date=${encodeURIComponent(date)}&demo=${demo}`
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    renderDataStatusBanner(data);
+  } catch {
+    /* banner is non-blocking */
   }
 }
 
@@ -448,6 +510,7 @@ async function fetchLeads(refresh = false) {
     $("#dateSelect").value = currentDate;
     renderMetrics(data);
     renderTable();
+    await fetchDataStatus();
     if (openLeadId) {
       const still = allLeads.find((l) => leadKey(l) === openLeadId);
       if (still) openDetailPanel(openLeadId, true);
