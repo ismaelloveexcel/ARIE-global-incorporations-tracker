@@ -1,3 +1,17 @@
+# ─── ALERT SETUP ─────────────────────────────────────
+# Before this works, add two secrets in GitHub:
+# Settings → Secrets and variables → Actions → New secret
+#
+# ALERT_EMAIL_FROM     your Outlook/Office365 address
+#                      e.g. ismael@ariefinance.com
+# ALERT_EMAIL_PASSWORD your Outlook password
+#   If MFA is enabled on your account:
+#   → Go to mysignins.microsoft.com
+#   → Security info → Add sign-in method
+#   → App password → Create
+#   → Copy the generated password exactly
+# ─────────────────────────────────────────────────────
+
 name: Incorporation Intelligence Engine — Daily Pipeline
 
 on:
@@ -81,6 +95,7 @@ jobs:
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Run pipeline
+        id: run_pipeline
         run: python main.py ${{ steps.build_args.outputs.args }}
 
       - name: Upload CSV snapshot as artifact
@@ -90,3 +105,79 @@ jobs:
           name: incorporation-snapshot-${{ github.run_id }}
           path: exports/
           retention-days: 90
+
+      - name: Prepare alert context
+        if: always()
+        id: alert_ctx
+        shell: bash
+        run: |
+          echo "run_date=$(date -u +'%d %b %Y')" >> "$GITHUB_OUTPUT"
+          echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          DOW=$(date -u +%u)
+          if [ "$DOW" = "1" ]; then
+            echo "is_monday=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_monday=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send failure alert email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
+          tls: true
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: "🔴 ARIE Pipeline Failed — ${{ steps.alert_ctx.outputs.run_date }} — ${{ job.name }}"
+          to: ismael@ariefinance.com
+          from: ${{ secrets.ALERT_EMAIL_FROM }}
+          body: |
+            The ARIE incorporation pipeline failed.
+
+            Job: ${{ job.name }}
+            Workflow: ${{ github.workflow }}
+            Failed step: Check the run log for the first red step (often "Run pipeline", "Install Playwright browsers", or an earlier setup step).
+            Run date (UTC): ${{ steps.alert_ctx.outputs.run_date }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Trigger: ${{ github.event_name }}
+
+            Failed run:
+            ${{ steps.alert_ctx.outputs.run_url }}
+
+            What to check:
+            1. Companies House API key — HTTP 401 usually means expired or invalid (secret COMPANIES_HOUSE_API_KEY).
+            2. Mauritius site unreachable or HTML changed — scraper may return zero rows or timeout.
+            3. Supabase connection failed — check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY secrets.
+            4. Playwright browser not installed — "Install Playwright browsers" step may have failed on the runner.
+
+            Re-run manually:
+            GitHub → Actions → "Incorporation Intelligence Engine — Daily Pipeline" → Run workflow → choose date/options if needed.
+
+      - name: Send Monday success alert email
+        if: success() && github.event_name == 'schedule' && steps.alert_ctx.outputs.is_monday == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
+          tls: true
+          username: ${{ secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: "✅ ARIE Pipeline — Weekly OK — ${{ steps.alert_ctx.outputs.run_date }}"
+          to: ismael@ariefinance.com
+          from: ${{ secrets.ALERT_EMAIL_FROM }}
+          body: |
+            The scheduled ARIE incorporation pipeline completed successfully (Monday weekly check).
+
+            Run date (UTC): ${{ steps.alert_ctx.outputs.run_date }}
+            Job: ${{ job.name }}
+            Workflow: ${{ github.workflow }}
+
+            Next step for you:
+            Spot-check the exports/ folder in the run artifacts (or your local exports/) and confirm today's CSV files look reasonable (UK + Mauritius row counts).
+
+            Successful run:
+            ${{ steps.alert_ctx.outputs.run_url }}
