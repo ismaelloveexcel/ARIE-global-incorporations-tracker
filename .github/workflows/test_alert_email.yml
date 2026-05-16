@@ -14,7 +14,6 @@ jobs:
           server_address: smtp.office365.com
           server_port: 587
           secure: false
-          tls: true
           username: ${{ secrets.ALERT_EMAIL_FROM }}
           password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           subject: "✅ ARIE — Outlook alert test"
