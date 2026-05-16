@@ -1,16 +1,20 @@
 """
-Arie Incorporation Monitor — stakeholder demo web app.
+Arie Incorporation Monitor — Phase 1 web app.
 
 Run: python -m app.main
+User view: /  (Direct Clients + Introducers tabs)
+Ops view:    /dev  (not linked from user UI)
 """
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+import subprocess
+import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,13 +29,16 @@ from uk_leads.core import (
     csv_path_for_date,
     export_csv,
     fetch_uk_leads,
-    load_csv,
 )
-from uk_leads.enrichment import compute_metrics, enrich_rows
+from uk_leads.dashboard import filter_tab_leads, lead_id
+from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path
+from uk_leads.dev_config import load_config, save_config
+from uk_leads.enrichment import enrich_rows
+from uk_leads.health import run_health_checks
 
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="Arie Incorporation Monitor", version="0.2.0")
+app = FastAPI(title="Arie Incorporation Monitor", version="1.0.0")
 
 
 class AssignmentUpdate(BaseModel):
@@ -42,71 +49,96 @@ class AssignmentUpdate(BaseModel):
     follow_up_at: str | None = None
 
 
-def _lead_company_numbers(incorporation_date: str | None = None) -> set[str]:
-    d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    numbers: set[str] = set()
-    for demo in (True, False):
-        path = csv_path_for_date(d, demo=demo)
-        if not path.exists():
-            continue
-        for row in load_csv(path):
-            num = row.get("company_number")
-            if num:
-                numbers.add(str(num))
-    return numbers
+class DevConfigUpdate(BaseModel):
+    assignment_pools: dict[str, list[str]] | None = None
+    roadmap: list[dict] | None = None
+    implementation_log: dict | None = None
 
 
-def _find_lead(company_number: str, incorporation_date: str | None = None) -> dict | None:
+def _jurisdiction_counts(rows: list[dict]) -> tuple[int, int]:
+    uk = 0
+    mu = 0
+    for r in rows:
+        source = (r.get("source") or "").strip().lower()
+        jurisdiction = (r.get("jurisdiction") or "").strip()
+        if source == "mauritius_mns" or jurisdiction == "Mauritius":
+            mu += 1
+        else:
+            uk += 1
+    return uk, mu
+
+
+def compute_tab_metrics(rows: list[dict]) -> dict:
+    total = len(rows)
+    high = sum(1 for r in rows if float(r.get("score") or 0) >= 70)
+    assigned = sum(1 for r in rows if (r.get("assigned_to") or "").strip())
+    uk_count, mauritius_count = _jurisdiction_counts(rows)
+    return {
+        "total_leads": total,
+        "high_priority": high,
+        "assigned_count": assigned,
+        "unassigned_count": max(0, total - assigned),
+        "uk_count": uk_count,
+        "mauritius_count": mauritius_count,
+    }
+
+
+def _load_merged_rows(incorporation_date: str, demo: bool) -> tuple[list[dict], dict]:
+    rows, meta = merge_leads_for_date(incorporation_date, demo=demo)
+    config = load_config()
+    pools = config.get("assignment_pools", assignments.DEFAULT_POOLS)
+    rows = assignments.apply_assignments(rows, pools=pools)
+    return rows, meta
+
+
+def _find_lead(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True) -> dict | None:
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    for demo in (True, False):
-        path = csv_path_for_date(d, demo=demo)
-        if not path.exists():
-            continue
-        for row in load_csv(path):
-            if row.get("company_number") == company_number:
-                return row
+    rows, _ = _load_merged_rows(d, demo=demo)
+    for row in rows:
+        if row.get("lead_id") == lead_id_key or row.get("company_number") == lead_id_key:
+            return row
     return None
 
 
 def _package_response(
     rows: list[dict],
+    tab: str | None,
     incorporation_date: str,
     demo: bool,
-    source_file: str,
-    total_fetched: int | None = None,
+    meta: dict,
     last_refreshed: str | None = None,
+    total_fetched: int | None = None,
 ) -> dict:
-    rows = assignments.merge_into_rows(rows)
-    rows = enrich_rows(rows)
-    metrics = compute_metrics(rows)
+    all_rows = rows
+    if tab in ("direct_clients", "introducers"):
+        rows = filter_tab_leads(rows, tab)
+
     return {
         "incorporation_date": incorporation_date,
         "demo": demo,
+        "tab": tab,
         "count": len(rows),
         "total_fetched": total_fetched,
-        "source_file": source_file,
         "last_refreshed": last_refreshed,
-        "metrics": metrics,
+        "metrics": compute_tab_metrics(rows),
         "leads": rows,
+        "meta": meta,
+        "team": TEAM_MEMBERS,
+        "show_uk_introducer_notice": tab == "introducers",
     }
 
 
 @app.get("/api/meta")
 def api_meta():
+    config = load_config()
     return {
         "team": TEAM_MEMBERS,
+        "assignment_pools": config.get("assignment_pools"),
         "brand": "Arie Finance",
         "positioning": (
-            "UK Companies House monitoring is operational using official API data. "
-            "Mauritius API onboarding is underway. Additional jurisdictions will be "
-            "added only when reliable official access exists."
+            "Daily onboarding intelligence — UK Companies House and Mauritius GBC/AC. "
+            "Direct Clients and Introducers dashboards for team assignment."
         ),
-        "jurisdictions": [
-            {"code": "UK", "name": "United Kingdom", "status": "live", "source": "Companies House API"},
-            {"code": "MU", "name": "Mauritius", "status": "pending", "source": "MNS APIMall (access in progress)"},
-            {"code": "DIFC", "name": "UAE / DIFC", "status": "planned", "source": "Access method under evaluation"},
-            {"code": "GI", "name": "Gibraltar", "status": "planned", "source": "Manual / future"},
-        ],
         "has_api_key": bool(os.environ.get("COMPANIES_HOUSE_API_KEY")),
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
         "workflow_statuses": assignments.WORKFLOW_STATUSES,
@@ -115,23 +147,38 @@ def api_meta():
 
 
 @app.get("/api/leads")
-def api_leads(incorporation_date: str | None = None, demo: bool = True):
+def api_leads(
+    incorporation_date: str | None = None,
+    demo: bool = True,
+    tab: str | None = Query(None, description="direct_clients | introducers"),
+):
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    path = csv_path_for_date(d, demo=demo)
-    rows = load_csv(path)
-    if not rows:
+    rows, meta = _load_merged_rows(d, demo=demo)
+
+    if not rows and not Path(csv_path_for_date(d, demo=demo)).exists():
         raise HTTPException(
             status_code=404,
-            detail=f"No data for {d}. Click Refresh to fetch from Companies House.",
+            detail=f"No data for {d}. Refresh UK leads or run the Mauritius pipeline.",
         )
+
     last = refresh_meta.get_last_refresh(d, demo)
-    if not last and path.exists():
-        last = datetime_from_mtime(path)
-    return _package_response(rows, d, demo, str(path), last_refreshed=last)
+    uk_path = csv_path_for_date(d, demo=demo)
+    if not last and uk_path.exists():
+        last = datetime_from_mtime(uk_path)
+    if not last:
+        mu_path = pipeline_export_path(d)
+        if mu_path.exists():
+            last = datetime_from_mtime(mu_path)
+
+    return _package_response(rows, tab, d, demo, meta, last_refreshed=last)
 
 
 @app.post("/api/refresh")
-def api_refresh(incorporation_date: str | None = None, demo: bool = True):
+def api_refresh(
+    incorporation_date: str | None = None,
+    demo: bool = True,
+    tab: str | None = Query(None),
+):
     if not os.environ.get("COMPANIES_HOUSE_API_KEY"):
         raise HTTPException(status_code=503, detail="COMPANIES_HOUSE_API_KEY not set in .env")
 
@@ -139,56 +186,68 @@ def api_refresh(incorporation_date: str | None = None, demo: bool = True):
     min_score = DEMO_MIN_SCORE if demo else None
     top = DEMO_TOP if demo else None
 
-    rows, total = fetch_uk_leads(d, d, min_score=min_score, top=top)
+    uk_rows, total = fetch_uk_leads(d, d, min_score=min_score, top=top)
     path = csv_path_for_date(d, demo=demo)
-    export_csv(rows, path)
-    refreshed = refresh_meta.record_refresh(d, demo, total, len(rows))
+    export_csv(uk_rows, path)
+    refreshed = refresh_meta.record_refresh(d, demo, total, len(uk_rows))
 
+    rows, meta = _load_merged_rows(d, demo=demo)
     return _package_response(
-        rows, d, demo, str(path), total_fetched=total, last_refreshed=refreshed
+        rows, tab, d, demo, meta, total_fetched=total, last_refreshed=refreshed
     )
 
 
-@app.patch("/api/leads/{company_number}")
-def api_update_lead(company_number: str, body: AssignmentUpdate):
+@app.patch("/api/leads/{lead_id_key}")
+def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
     entry = assignments.set_assignment(
-        company_number,
+        lead_id_key,
         assigned_to=body.assigned_to,
         notes=body.notes,
         status=body.status,
         contacted_at=body.contacted_at,
         follow_up_at=body.follow_up_at,
     )
-    return {"company_number": company_number, **entry}
+    return {"lead_id": lead_id_key, **entry}
 
 
-@app.get("/api/leads/{company_number}/people")
-def api_lead_people(company_number: str, incorporation_date: str | None = None):
+@app.get("/api/leads/{lead_id_key}/people")
+def api_lead_people(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True):
+    lead = _find_lead(lead_id_key, incorporation_date, demo=demo)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if (lead.get("source") or "").lower() != "companies_house":
+        return {
+            "officers": [],
+            "psc": [],
+            "strengths": lead.get("strengths", []),
+            "cautions": lead.get("cautions", []),
+            "message": "Officer data available for UK Companies House leads only.",
+        }
+
     if not os.environ.get("COMPANIES_HOUSE_API_KEY"):
         raise HTTPException(status_code=503, detail="COMPANIES_HOUSE_API_KEY not set")
+
     from uk_leads.companies_house_people import fetch_people
     from uk_leads.signals import compute_signals
 
-    lead_numbers = _lead_company_numbers(incorporation_date)
+    num = lead.get("company_number") or lead_id_key
     try:
-        people = fetch_people(company_number, lead_company_numbers=lead_numbers)
+        people = fetch_people(num, lead_company_numbers={num})
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Companies House error: {exc}") from exc
 
-    lead = _find_lead(company_number, incorporation_date)
-    if lead:
-        sig = compute_signals(
-            lead,
-            officer_count=len(people.get("officers") or []),
-            director_signals=people.get("director_signals"),
-        )
-        people["strengths"] = sig["strengths"]
-        people["cautions"] = sig["cautions"]
+    sig = compute_signals(
+        lead,
+        officer_count=len(people.get("officers") or []),
+        director_signals=people.get("director_signals"),
+    )
+    people["strengths"] = sig["strengths"]
+    people["cautions"] = sig["cautions"]
     return people
 
 
-@app.post("/api/leads/{company_number}/brief")
-def api_generate_brief(company_number: str, incorporation_date: str | None = None):
+@app.post("/api/leads/{lead_id_key}/brief")
+def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True):
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY not set in .env")
 
@@ -196,20 +255,16 @@ def api_generate_brief(company_number: str, incorporation_date: str | None = Non
     from uk_leads.companies_house_people import fetch_people
     from uk_leads.signals import compute_signals
 
-    lead = _find_lead(company_number, incorporation_date)
+    lead = _find_lead(lead_id_key, incorporation_date, demo=demo)
     if not lead:
-        raise HTTPException(status_code=404, detail="Lead not in loaded dataset. Refresh data first.")
+        raise HTTPException(status_code=404, detail="Lead not in loaded dataset.")
 
-    enriched = enrich_rows([lead])[0]
-    lead = enriched
-
+    lead = enrich_rows([lead])[0]
     people = None
-    if os.environ.get("COMPANIES_HOUSE_API_KEY"):
+    if (lead.get("source") or "").lower() == "companies_house" and os.environ.get("COMPANIES_HOUSE_API_KEY"):
         try:
-            people = fetch_people(
-                company_number,
-                lead_company_numbers=_lead_company_numbers(incorporation_date),
-            )
+            num = lead.get("company_number") or lead_id_key
+            people = fetch_people(num, lead_company_numbers={num})
             sig = compute_signals(
                 lead,
                 officer_count=len(people.get("officers") or []),
@@ -222,21 +277,92 @@ def api_generate_brief(company_number: str, incorporation_date: str | None = Non
 
     try:
         brief = generate_brief(lead, people)
-        save_brief(company_number, brief)
+        save_brief(lead_id_key, brief)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return {"company_number": company_number, "brief": brief, "lead": lead}
+    return {"lead_id": lead_id_key, "brief": brief, "lead": lead}
 
 
-@app.get("/api/leads/{company_number}/brief")
-def api_get_brief(company_number: str):
+@app.get("/api/leads/{lead_id_key}/brief")
+def api_get_brief(lead_id_key: str):
     from uk_leads.brief import load_brief
 
-    brief = load_brief(company_number)
+    brief = load_brief(lead_id_key)
     if not brief:
         raise HTTPException(status_code=404, detail="No brief generated yet.")
-    return {"company_number": company_number, "brief": brief}
+    return {"lead_id": lead_id_key, "brief": brief}
+
+
+@app.get("/dev")
+def dev_page():
+    return FileResponse(STATIC / "dev.html")
+
+
+@app.get("/api/dev/health")
+def api_dev_health(incorporation_date: str | None = None):
+    return run_health_checks(incorporation_date)
+
+
+@app.get("/api/dev/config")
+def api_dev_config_get():
+    return load_config()
+
+
+@app.post("/api/dev/config")
+def api_dev_config_post(body: DevConfigUpdate):
+    config = load_config()
+    if body.assignment_pools is not None:
+        config["assignment_pools"] = body.assignment_pools
+    if body.roadmap is not None:
+        config["roadmap"] = body.roadmap
+    if body.implementation_log is not None:
+        config["implementation_log"] = body.implementation_log
+    return save_config(config)
+
+
+@app.post("/api/dev/refresh/uk")
+def api_dev_refresh_uk(incorporation_date: str | None = None, demo: bool = True):
+    return api_refresh(incorporation_date=incorporation_date, demo=demo)
+
+
+@app.post("/api/dev/refresh/mauritius")
+def api_dev_refresh_mauritius(incorporation_date: str | None = None):
+    d = incorporation_date or date.today().isoformat()
+    cmd = [sys.executable, "main.py", "--date", d, "--skip-difc"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(Path.cwd()),
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Mauritius pipeline timed out after 5 minutes") from None
+
+    return {
+        "date": d,
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+        "success": proc.returncode == 0,
+    }
+
+
+@app.get("/api/dev/stats")
+def api_dev_stats(incorporation_date: str | None = None, demo: bool = True):
+    d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
+    rows, _ = _load_merged_rows(d, demo=demo)
+    direct = filter_tab_leads(rows, "direct_clients")
+    intro = filter_tab_leads(rows, "introducers")
+    return {
+        "date": d,
+        "assignment_stats": assignments.assignment_stats(rows),
+        "unassigned": sum(1 for r in rows if not (r.get("assigned_to") or "").strip()),
+        "direct_clients_count": len(direct),
+        "introducers_count": len(intro),
+    }
 
 
 @app.get("/")
@@ -248,8 +374,6 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 def datetime_from_mtime(path: Path) -> str:
-    from datetime import datetime, timezone
-
     mtime = path.stat().st_mtime
     return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 

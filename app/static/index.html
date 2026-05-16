@@ -13,10 +13,9 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    
     <div class="loading-overlay" id="loadingOverlay" hidden>
       <div class="spinner" aria-hidden="true"></div>
-      <p>Fetching from Companies House…</p>
+      <p id="loadingText">Loading leads…</p>
     </div>
 
     <header class="header">
@@ -26,51 +25,54 @@
           <div>
             <p class="brand-eyebrow">Arie Finance</p>
             <h1>Incorporation Monitor</h1>
-            <p class="tagline">Onboarding intelligence · official UK register data</p>
+            <p class="tagline">Phase 1 · Direct Clients &amp; Introducers</p>
           </div>
         </div>
         <div class="header-actions">
           <label class="field-inline">
-            <span>Incorporation date</span>
+            <span>Date</span>
             <input type="date" id="dateInput" />
           </label>
           <label class="toggle">
             <input type="checkbox" id="demoMode" checked />
-            <span>Curated demo (top 25)</span>
+            <span>Limit UK list</span>
           </label>
-          <button type="button" class="btn btn-primary" id="refreshBtn">Refresh from API</button>
+          <button type="button" class="btn btn-primary" id="refreshBtn">Refresh UK</button>
         </div>
       </div>
     </header>
 
-    <section class="positioning" id="positioningBar"></section>
-
-    <details class="roadmap roadmap-collapsible" id="roadmapSection">
-      <summary>Jurisdictions</summary>
-      <div class="roadmap-grid" id="roadmapGrid"></div>
-    </details>
+    <nav class="dashboard-tabs" aria-label="Dashboards">
+      <button type="button" class="tab-btn active" data-tab="direct_clients">Direct Clients</button>
+      <button type="button" class="tab-btn" data-tab="introducers">Introducers</button>
+    </nav>
 
     <main class="main">
+      <div class="notice-banner" id="ukIntroducerNotice" hidden>
+        UK introducer monitoring — to be implemented
+      </div>
+
       <section class="metrics" id="metrics" aria-label="Summary metrics"></section>
+      <p class="data-source-subtitle" id="dataSourceSubtitle" hidden>UK: top 25 by score · Mauritius: all</p>
+      <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden></div>
       <p class="last-refreshed" id="lastRefreshed"></p>
 
       <section class="filters panel">
-        <div class="quick-filters" id="quickFilters">
-          <span class="quick-label">Quick filters</span>
-          <button type="button" class="chip" data-preset="high">High priority</button>
-          <button type="button" class="chip" data-preset="fintech">Fintech / payments</button>
-          <button type="button" class="chip" data-preset="introducer">Introducers</button>
-          <button type="button" class="chip" data-preset="unassigned">Unassigned</button>
-          <button type="button" class="chip chip-ghost" data-preset="clear">Clear all</button>
-        </div>
         <div class="filters-grid">
           <label>
             <span>Search</span>
             <input type="search" id="filterSearch" placeholder="Company name…" />
           </label>
           <label>
-            <span>Min score</span>
-            <input type="number" id="filterMinScore" min="0" max="100" placeholder="0" />
+            <span>Sort by</span>
+            <select id="filterSort">
+              <option value="score-desc" selected>Score (highest first)</option>
+              <option value="score-asc">Score (lowest first)</option>
+              <option value="company_name-asc">Company name (A–Z)</option>
+              <option value="company_name-desc">Company name (Z–A)</option>
+              <option value="incorporation_date-desc">Incorporated (newest first)</option>
+              <option value="incorporation_date-asc">Incorporated (oldest first)</option>
+            </select>
           </label>
           <label>
             <span>Priority</span>
@@ -82,18 +84,18 @@
             </select>
           </label>
           <label>
-            <span>Lead type</span>
-            <select id="filterLeadType">
-              <option value="">All</option>
-              <option value="direct">Direct</option>
-              <option value="introducer">Introducer</option>
-            </select>
-          </label>
-          <label>
             <span>Assigned to</span>
             <select id="filterAssigned">
               <option value="">All</option>
               <option value="__unassigned__">Unassigned</option>
+            </select>
+          </label>
+          <label>
+            <span>Jurisdiction</span>
+            <select id="filterJurisdiction">
+              <option value="">All</option>
+              <option value="UK">UK</option>
+              <option value="Mauritius">Mauritius</option>
             </select>
           </label>
         </div>
@@ -102,8 +104,8 @@
       <section class="panel table-panel">
         <div class="panel-head panel-head-row">
           <div>
-            <h2>Lead pipeline</h2>
-            <p id="panelSubtitle">Click a row for full intelligence · Verify opens Companies House</p>
+            <h2 id="panelTitle">Direct Clients</h2>
+            <p id="panelSubtitle">Loading…</p>
           </div>
           <button type="button" class="btn btn-ghost" id="exportBtn">Export view (CSV)</button>
         </div>
@@ -111,34 +113,27 @@
           <table id="leadsTable">
             <thead>
               <tr>
+                <th data-sort="company_name" class="sortable">Company</th>
+                <th data-sort="jurisdiction" class="sortable">Jurisdiction</th>
+                <th data-sort="entity_type" class="sortable">Entity type</th>
                 <th data-sort="score" class="sortable">Score</th>
                 <th data-sort="priority" class="sortable">Priority</th>
-                <th data-sort="company_name" class="sortable">Company</th>
-                <th data-sort="incorporation_age_days" class="sortable">Age</th>
-                <th>Why this lead matters</th>
-                <th data-sort="lead_type" class="sortable">Type</th>
-                <th class="col-verify">Register</th>
-                <th data-sort="assigned_to" class="sortable">Assigned</th>
+                <th>SIC</th>
+                <th data-sort="incorporation_date" class="sortable">Incorporated</th>
+                <th data-sort="assigned_to" class="sortable">Assigned to</th>
+                <th>Notes</th>
+                <th class="col-verify">Verify</th>
               </tr>
             </thead>
             <tbody id="leadsBody">
               <tr>
-                <td colspan="8" class="empty">Loading…</td>
+                <td colspan="10" class="empty">Loading…</td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
     </main>
-
-    <aside class="detail-panel" id="detailPanel" hidden aria-label="Lead detail">
-      <div class="detail-header">
-        <h2 id="detailTitle">Lead detail</h2>
-        <button type="button" class="btn-close" id="detailClose" aria-label="Close">×</button>
-      </div>
-      <div class="detail-body" id="detailBody"></div>
-    </aside>
-    <div class="detail-backdrop" id="detailBackdrop" hidden></div>
 
     <div class="toast" id="toast" hidden role="status"></div>
     <script src="/static/app.js"></script>

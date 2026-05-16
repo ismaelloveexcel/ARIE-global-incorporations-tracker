@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arie Finance · Mission Control</title>
+    <link rel="stylesheet" href="/static/dev.css" />
+  </head>
+  <body class="dev-body">
+    <aside class="dev-sidebar">
+      <p class="dev-brand">Arie Finance</p>
+      <p class="dev-sub">Mission Control</p>
+      <nav class="dev-nav">
+        <button type="button" class="dev-nav-btn active" data-section="overview">Overview</button>
+        <button type="button" class="dev-nav-btn" data-section="health">Health</button>
+        <button type="button" class="dev-nav-btn" data-section="roadmap">Roadmap</button>
+        <button type="button" class="dev-nav-btn" data-section="team">Team</button>
+        <button type="button" class="dev-nav-btn" data-section="controls">Controls</button>
+        <button type="button" class="dev-nav-btn" data-section="log">Log</button>
+      </nav>
+      <a class="dev-back" href="/">← User dashboards</a>
+    </aside>
+
+    <main class="dev-main">
+      <header class="dev-header">
+        <h1 id="devSectionTitle">Overview</h1>
+        <label class="dev-date">
+          Data date
+          <input type="date" id="devDate" />
+        </label>
+      </header>
+
+      <section class="dev-section active" id="section-overview">
+        <p class="dev-lead">
+          Internal ops for the lead intelligence system. User-facing dashboards are at
+          <a href="/">/</a> (Direct Clients &amp; Introducers).
+        </p>
+        <div class="dev-stat-grid" id="overviewStats"></div>
+      </section>
+
+      <section class="dev-section" id="section-health">
+        <div class="dev-toolbar">
+          <button type="button" class="dev-btn" id="runHealthBtn">Run health check</button>
+        </div>
+        <div class="health-grid" id="healthGrid"></div>
+        <div class="health-fixes" id="healthFixes"></div>
+      </section>
+
+      <section class="dev-section" id="section-roadmap">
+        <p class="dev-hint">Click a cell to edit. Saves to data/dev_config.json.</p>
+        <div class="dev-table-wrap">
+          <table class="dev-table" id="roadmapTable">
+            <thead>
+              <tr>
+                <th>Jurisdiction</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="roadmapBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="dev-section" id="section-team">
+        <div class="pool-editor">
+          <h2>Direct Clients pool</h2>
+          <div class="pool-tags" id="poolDirect"></div>
+          <div class="pool-add">
+            <input type="text" id="addDirect" placeholder="Add name" />
+            <button type="button" class="dev-btn" data-pool="direct_clients">+</button>
+          </div>
+        </div>
+        <div class="pool-editor">
+          <h2>Introducers pool</h2>
+          <div class="pool-tags" id="poolIntro"></div>
+          <div class="pool-add">
+            <input type="text" id="addIntro" placeholder="Add name" />
+            <button type="button" class="dev-btn" data-pool="introducers">+</button>
+          </div>
+        </div>
+        <div id="teamStats"></div>
+      </section>
+
+      <section class="dev-section" id="section-controls">
+        <div class="control-row">
+          <button type="button" class="dev-btn dev-btn-primary" id="refreshUkBtn">Refresh UK leads — today</button>
+          <button type="button" class="dev-btn dev-btn-primary" id="refreshMuBtn">Refresh Mauritius — today</button>
+        </div>
+        <pre class="log-panel" id="pipelineLog">Pipeline output will appear here…</pre>
+      </section>
+
+      <section class="dev-section" id="section-log">
+        <p class="dev-hint">Click status to cycle. Saves to dev_config.json.</p>
+        <div id="implLog"></div>
+      </section>
+    </main>
+
+    <script src="/static/dev.js"></script>
+  </body>
+</html>
