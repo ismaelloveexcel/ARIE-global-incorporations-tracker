@@ -1,19 +1,14 @@
-# ─── ALERT SETUP ─────────────────────────────────────
-# Before this works, add two secrets in GitHub:
-# Settings → Secrets and variables → Actions → New secret
+# ─── ALERT SETUP (SendGrid) ───────────────────────────
+# 1. SendGrid → Settings → API Keys → Create (Mail Send permission)
+# 2. SendGrid → Settings → Sender Authentication → Verify Single Sender
+#    Use the same address as ALERT_EMAIL_FROM (e.g. ismael@ariefinance.com)
+# 3. GitHub → Settings → Secrets and variables → Actions:
 #
-# ALERT_EMAIL_FROM     your Outlook/Office365 address
-#                      e.g. ismael@ariefinance.com
-# ALERT_EMAIL_PASSWORD your Outlook password
-#   If MFA is enabled on your account:
-#   → Go to mysignins.microsoft.com
-#   → Security info → Add sign-in method
-#   → App password → Create
-#   → Copy the generated password exactly
+#    SENDGRID_API_KEY   SendGrid API key (starts with SG.)
+#    ALERT_EMAIL_FROM   Verified sender address in SendGrid
+#                       e.g. ismael@ariefinance.com
 #
-# If email fails with "SmtpClientAuthentication is disabled":
-#   → Microsoft 365 admin must enable SMTP AUTH for this mailbox
-#   → https://aka.ms/smtp_auth_disabled
+# Alerts are delivered to: ismael@ariefinance.com
 # ─────────────────────────────────────────────────────
 
 name: Incorporation Intelligence Engine — Daily Pipeline
@@ -128,11 +123,11 @@ jobs:
         if: failure()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.office365.com
+          server_address: smtp.sendgrid.net
           server_port: 587
           secure: false
-          username: ${{ secrets.ALERT_EMAIL_FROM }}
-          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          username: apikey
+          password: ${{ secrets.SENDGRID_API_KEY }}
           subject: "🔴 ARIE Pipeline Failed — ${{ steps.alert_ctx.outputs.run_date }} — ${{ job.name }}"
           to: ismael@ariefinance.com
           from: ${{ secrets.ALERT_EMAIL_FROM }}
@@ -163,11 +158,11 @@ jobs:
         if: success() && github.event_name == 'schedule' && steps.alert_ctx.outputs.is_monday == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.office365.com
+          server_address: smtp.sendgrid.net
           server_port: 587
           secure: false
-          username: ${{ secrets.ALERT_EMAIL_FROM }}
-          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          username: apikey
+          password: ${{ secrets.SENDGRID_API_KEY }}
           subject: "✅ ARIE Pipeline — Weekly OK — ${{ steps.alert_ctx.outputs.run_date }}"
           to: ismael@ariefinance.com
           from: ${{ secrets.ALERT_EMAIL_FROM }}
