@@ -11,7 +11,7 @@ jobs:
       - name: Send test via Outlook SMTP
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.office365.com
+          server_address: smtp-mail.outlook.com
           server_port: 587
           secure: false
           username: ${{ secrets.ALERT_EMAIL_FROM }}

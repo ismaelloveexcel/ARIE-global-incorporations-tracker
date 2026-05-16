@@ -119,7 +119,7 @@ jobs:
         if: failure()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.office365.com
+          server_address: smtp-mail.outlook.com
           server_port: 587
           secure: false
           username: ${{ secrets.ALERT_EMAIL_FROM }}
@@ -154,7 +154,7 @@ jobs:
         if: success() && github.event_name == 'schedule' && steps.alert_ctx.outputs.is_monday == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.office365.com
+          server_address: smtp-mail.outlook.com
           server_port: 587
           secure: false
           username: ${{ secrets.ALERT_EMAIL_FROM }}
