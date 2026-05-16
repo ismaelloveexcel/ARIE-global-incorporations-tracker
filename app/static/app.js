@@ -1,18 +1,21 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
+const PANEL_STATUSES = ["New", "Contacted", "Not Interested", "Converted"];
+const MU_DIRECTOR_MSG = "Director data not yet available for Mauritius companies";
+
 let team = [];
 let allLeads = [];
 let activeTab = "direct_clients";
 let sortKey = "score";
 let sortDir = "desc";
 let lastPayload = null;
-
-function yesterdayISO() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
+let hasOpenaiKey = false;
+let availableDates = [];
+let dateDetails = [];
+let currentDate = "";
+let openLeadId = null;
+let detailLead = null;
 
 function escapeHtml(s) {
   const d = document.createElement("div");
@@ -47,10 +50,36 @@ function formatRefreshed(iso) {
   }
 }
 
+function formatDisplayDate(iso) {
+  try {
+    return new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function getCurrentDate() {
+  return $("#dateSelect")?.value || currentDate;
+}
+
+function isMauritiusLead(lead) {
+  const source = (lead?.source || "").toLowerCase();
+  return source === "mauritius_mns" || (lead?.jurisdiction || "").trim() === "Mauritius";
+}
+
+function leadKey(lead) {
+  return lead?.lead_id || lead?.company_number || "";
+}
+
 async function loadMeta() {
   const res = await fetch("/api/meta");
   const data = await res.json();
   team = data.team || [];
+  hasOpenaiKey = !!data.has_openai_key;
   const assignedFilter = $("#filterAssigned");
   team.forEach((name) => {
     const opt = document.createElement("option");
@@ -60,13 +89,94 @@ async function loadMeta() {
   });
 }
 
+async function loadAvailableDates() {
+  const demo = $("#demoMode").checked;
+  const res = await fetch(`/api/available-dates?demo=${demo}`);
+  const data = await res.json();
+  availableDates = data.dates || [];
+  dateDetails = data.date_details || [];
+  const recommended = data.recommended || availableDates[0] || "";
+  currentDate = recommended;
+  renderDateSelect();
+  updateDateNavButtons();
+  return recommended;
+}
+
+function dateDetail(date) {
+  return dateDetails.find((d) => d.date === date) || { date, uk_count: 0, mauritius_count: 0 };
+}
+
+function dateOptionLabel(d) {
+  const info = dateDetail(d);
+  const uk = info.uk_count ?? 0;
+  const mu = info.mauritius_count ?? 0;
+  const muLabel = mu > 0 ? String(mu) : "none";
+  return `${formatDisplayDate(d)} — UK: ${uk} · MU: ${muLabel}`;
+}
+
+function renderDateSelect() {
+  const sel = $("#dateSelect");
+  sel.innerHTML = "";
+  const list = availableDates.length ? availableDates : dateDetails.map((d) => d.date);
+  list.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = d;
+    opt.textContent = dateOptionLabel(d);
+    sel.appendChild(opt);
+  });
+  if (currentDate && list.includes(currentDate)) {
+    sel.value = currentDate;
+  } else if (list.length) {
+    sel.value = list[0];
+    currentDate = list[0];
+  }
+}
+
+function updateDateNavButtons() {
+  const idx = availableDates.indexOf(getCurrentDate());
+  $("#datePrev").disabled = idx < 0 || idx >= availableDates.length - 1;
+  $("#dateNext").disabled = idx <= 0;
+}
+
+function navigateDate(delta) {
+  const idx = availableDates.indexOf(getCurrentDate());
+  if (idx < 0) return;
+  const next = idx - delta;
+  if (next < 0 || next >= availableDates.length) return;
+  setSelectedDate(availableDates[next]);
+}
+
+function setSelectedDate(date) {
+  currentDate = date;
+  $("#dateSelect").value = date;
+  updateDateNavButtons();
+  fetchLeads(false);
+}
+
+function showFieldSaved(anchorEl, success = true) {
+  if (!anchorEl) return;
+  const wrap = anchorEl.closest(".field-with-save") || anchorEl.parentElement;
+  let indicator = wrap.querySelector(".save-feedback");
+  if (!indicator) {
+    indicator = document.createElement("span");
+    indicator.className = "save-feedback";
+    anchorEl.insertAdjacentElement("afterend", indicator);
+  }
+  indicator.textContent = success ? "Saved ✓" : "Save failed ✗";
+  indicator.classList.toggle("save-ok", success);
+  indicator.classList.toggle("save-fail", !success);
+  clearTimeout(indicator._t);
+  indicator._t = setTimeout(() => {
+    indicator.textContent = "";
+    indicator.classList.remove("save-ok", "save-fail");
+  }, 3000);
+}
+
 function countUkMu(rows) {
   let uk = 0;
   let mu = 0;
   for (const r of rows) {
-    const source = (r.source || "").toLowerCase();
-    const jurisdiction = (r.jurisdiction || "").trim();
-    if (source === "mauritius_mns" || jurisdiction === "Mauritius") mu += 1;
+    if (isMauritiusLead(r)) mu += 1;
     else uk += 1;
   }
   return { uk, mu };
@@ -98,10 +208,16 @@ function renderMetrics(payload) {
 
   const muNotice = $("#mauritiusMissingNotice");
   if (meta.mauritius_export_missing) {
-    muNotice.textContent = `⚠ Mauritius data not available for ${payload.incorporation_date} — run the pipeline for this date to include Mauritius leads`;
+    const d = payload.incorporation_date;
+    $("#mauritiusMissingText").textContent =
+      `⚠ Mauritius data not available for ${d} — run the pipeline for this date to include Mauritius leads`;
+    const cmd = `python main.py --date ${d} --skip-difc`;
+    $("#muPipelineCmd").textContent = cmd;
+    $("#mauritiusMissingHint").hidden = false;
     muNotice.hidden = false;
   } else {
     muNotice.hidden = true;
+    $("#mauritiusMissingHint").hidden = true;
   }
 }
 
@@ -121,7 +237,7 @@ function priorityText(priority) {
 function displaySic(lead) {
   const sic = lead.sic_codes;
   if (!sic || sic === "—") return "—";
-  if ((lead.source || "").toLowerCase() === "mauritius_mns") return "—";
+  if (isMauritiusLead(lead)) return "—";
   return escapeHtml(sic);
 }
 
@@ -183,11 +299,12 @@ function updateSortHeaders() {
   }
 }
 
-function assignedOptions(lead) {
+function assignedOptions(lead, selected) {
+  const val = selected ?? lead.assigned_to ?? "";
   return team
     .map(
       (t) =>
-        `<option value="${escapeHtml(t)}" ${lead.assigned_to === t ? "selected" : ""}>${escapeHtml(t)}</option>`
+        `<option value="${escapeHtml(t)}" ${val === t ? "selected" : ""}>${escapeHtml(t)}</option>`
     )
     .join("");
 }
@@ -195,7 +312,7 @@ function assignedOptions(lead) {
 function verifyCell(lead) {
   const url = (lead.verify_url || "").trim();
   if (!url) return "—";
-  return `<a class="btn btn-verify" href="${escapeHtml(url)}" target="_blank" rel="noopener">Verify</a>`;
+  return `<a class="btn btn-verify" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Verify</a>`;
 }
 
 function renderTable() {
@@ -209,9 +326,10 @@ function renderTable() {
 
   body.innerHTML = filtered
     .map((lead) => {
-      const lid = lead.lead_id || lead.company_number;
+      const lid = leadKey(lead);
+      const selected = openLeadId === lid ? " selected" : "";
       return `
-        <tr data-lead-id="${escapeHtml(lid)}">
+        <tr class="lead-row${selected}" data-lead-id="${escapeHtml(lid)}">
           <td><span class="company-name">${escapeHtml(lead.company_name)}</span></td>
           <td>${escapeHtml(lead.jurisdiction || "—")}</td>
           <td>${escapeHtml(lead.entity_type || "—")}</td>
@@ -219,11 +337,10 @@ function renderTable() {
           <td>${priorityText(lead.priority)}</td>
           <td>${displaySic(lead)}</td>
           <td>${escapeHtml(lead.incorporation_date || "—")}</td>
-          <td class="assign-cell">
+          <td class="assign-cell field-with-save">
             <select class="assign-select" data-lead-id="${escapeHtml(lid)}">
               <option value="">—</option>${assignedOptions(lead)}
             </select>
-            <span class="saved-indicator" data-for="${escapeHtml(lid)}" hidden>Saved ✓</span>
           </td>
           <td>
             <input type="text" class="notes-input" data-lead-id="${escapeHtml(lid)}"
@@ -234,32 +351,32 @@ function renderTable() {
     })
     .join("");
 
+  body.querySelectorAll(".lead-row").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("select, input, a, button")) return;
+      openDetailPanel(row.dataset.leadId);
+    });
+  });
+
   body.querySelectorAll(".assign-select").forEach((sel) => {
+    sel.addEventListener("click", (e) => e.stopPropagation());
     sel.addEventListener("change", () => onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel));
   });
 
   body.querySelectorAll(".notes-input").forEach((inp) => {
-    inp.addEventListener("change", () => onAssign(inp.dataset.leadId, { notes: inp.value }));
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    inp.addEventListener("change", () => onAssign(inp.dataset.leadId, { notes: inp.value }, inp));
   });
 
   updateSortHeaders();
 }
 
-function showSaved(leadId) {
-  const el = document.querySelector(`.saved-indicator[data-for="${CSS.escape(leadId)}"]`);
-  if (!el) return;
-  el.hidden = false;
-  clearTimeout(el._t);
-  el._t = setTimeout(() => {
-    el.hidden = true;
-  }, 2000);
-}
-
-async function onAssign(leadId, patch, selectEl) {
-  const lead = allLeads.find((l) => (l.lead_id || l.company_number) === leadId);
+async function onAssign(leadId, patch, anchorEl) {
+  const lead = allLeads.find((l) => leadKey(l) === leadId);
   if (!lead) return;
   if (patch.assigned_to !== undefined) lead.assigned_to = patch.assigned_to;
   if (patch.notes !== undefined) lead.notes = patch.notes;
+  if (patch.status !== undefined) lead.status = patch.status;
 
   try {
     const res = await fetch(`/api/leads/${encodeURIComponent(leadId)}`, {
@@ -268,11 +385,26 @@ async function onAssign(leadId, patch, selectEl) {
       body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error("Save failed");
-    if (patch.assigned_to !== undefined) showSaved(leadId);
+    showFieldSaved(anchorEl, true);
+    if (detailLead && leadKey(detailLead) === leadId) {
+      detailLead = { ...detailLead, ...patch };
+    }
+    syncTableFromLead(lead);
   } catch {
+    showFieldSaved(anchorEl, false);
     showToast("Could not save — try again", true);
   }
   renderMetricsFromFiltered();
+}
+
+function syncTableFromLead(lead) {
+  const lid = leadKey(lead);
+  const row = document.querySelector(`tr[data-lead-id="${CSS.escape(lid)}"]`);
+  if (!row) return;
+  const sel = row.querySelector(".assign-select");
+  if (sel) sel.value = lead.assigned_to || "";
+  const notes = row.querySelector(".notes-input");
+  if (notes) notes.value = lead.notes || "";
 }
 
 function renderMetricsFromFiltered() {
@@ -293,14 +425,16 @@ function renderMetricsFromFiltered() {
 }
 
 async function fetchLeads(refresh = false) {
-  const date = $("#dateInput").value;
+  const date = getCurrentDate();
   const demo = $("#demoMode").checked;
+  if (!date) return;
   setLoading(true, refresh ? "Fetching UK from Companies House…" : "Loading leads…");
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(activeTab)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
   try {
     let res = await fetch(url, { method: refresh ? "POST" : "GET" });
     if (refresh && res.ok) {
+      await loadAvailableDates();
       res = await fetch(`/api/leads?${base}`);
     }
     if (!res.ok) {
@@ -310,8 +444,15 @@ async function fetchLeads(refresh = false) {
     const data = await res.json();
     lastPayload = data;
     allLeads = data.leads || [];
+    currentDate = data.incorporation_date;
+    $("#dateSelect").value = currentDate;
     renderMetrics(data);
     renderTable();
+    if (openLeadId) {
+      const still = allLeads.find((l) => leadKey(l) === openLeadId);
+      if (still) openDetailPanel(openLeadId, true);
+      else closeDetailPanel();
+    }
     showToast(refresh ? `Refreshed — ${data.count} leads in view` : `Loaded ${data.count} leads`);
   } catch (e) {
     showToast(e.message || "Failed to load", true);
@@ -350,17 +491,266 @@ function exportCsv() {
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `arie-${activeTab}-${$("#dateInput").value || "export"}.csv`;
+  a.download = `arie-${activeTab}-${getCurrentDate() || "export"}.csv`;
   a.click();
   showToast(`Exported ${rows.length} leads`);
 }
 
+/* —— Intelligence panel —— */
+
+function openDetailPanel(leadId, skipAnim = false) {
+  const lead = allLeads.find((l) => leadKey(l) === leadId);
+  if (!lead) return;
+  openLeadId = leadId;
+  detailLead = lead;
+  $$(".lead-row").forEach((r) => r.classList.toggle("selected", r.dataset.leadId === leadId));
+
+  $("#detailCompanyName").textContent = lead.company_name || "Company";
+  renderDetailShell(lead);
+  $("#detailBackdrop").hidden = false;
+  $("#detailPanel").hidden = false;
+  document.body.classList.add("panel-open");
+  if (!skipAnim) {
+    requestAnimationFrame(() => {
+      $("#detailBackdrop").classList.add("is-open");
+      $("#detailPanel").classList.add("is-open");
+    });
+  } else {
+    $("#detailBackdrop").classList.add("is-open");
+    $("#detailPanel").classList.add("is-open");
+  }
+  loadDetailPeople(lead);
+  loadExistingBrief(leadId);
+}
+
+function closeDetailPanel() {
+  openLeadId = null;
+  detailLead = null;
+  $$(".lead-row").forEach((r) => r.classList.remove("selected"));
+  $("#detailBackdrop").classList.remove("is-open");
+  $("#detailPanel").classList.remove("is-open");
+  document.body.classList.remove("panel-open");
+  setTimeout(() => {
+    $("#detailBackdrop").hidden = true;
+    $("#detailPanel").hidden = true;
+  }, 220);
+}
+
+function verifyLabel(lead) {
+  return isMauritiusLead(lead) ? "MNS Registry" : "Companies House";
+}
+
+function renderDetailShell(lead) {
+  const addr = (lead.registered_address || lead.address || "").trim();
+  const verifyUrl = (lead.verify_url || "").trim();
+  const statusVal = lead.status || "New";
+  const statusOpts = PANEL_STATUSES.map(
+    (s) => `<option value="${escapeHtml(s)}" ${statusVal === s ? "selected" : ""}>${escapeHtml(s)}</option>`
+  ).join("");
+
+  $("#detailBody").innerHTML = `
+    <section class="intel-section detail-company-header">
+      <h3 class="detail-company-title">${escapeHtml(lead.company_name)}</h3>
+      <div class="lead-card-meta">
+        <span class="jurisdiction-badge">${escapeHtml(lead.jurisdiction || "—")}</span>
+        <span class="entity-badge">${escapeHtml(lead.entity_type || "—")}</span>
+        ${scoreBadge(lead.score)}
+      </div>
+      <p class="detail-meta-line"><strong>Incorporated:</strong> ${escapeHtml(lead.incorporation_date || "—")}</p>
+      ${addr ? `<p class="detail-meta-line"><strong>Registered address:</strong> ${escapeHtml(addr)}</p>` : ""}
+      ${
+        verifyUrl
+          ? `<a class="btn btn-verify btn-block" href="${escapeHtml(verifyUrl)}" target="_blank" rel="noopener">Verify on ${escapeHtml(verifyLabel(lead))}</a>`
+          : ""
+      }
+    </section>
+
+    <section class="intel-section" id="detailOfficersSection">
+      <h3>Directors &amp; Officers</h3>
+      <p class="muted">Loading…</p>
+    </section>
+
+    <section class="intel-section" id="detailPscSection">
+      <h3>Persons with Significant Control</h3>
+      <p class="muted">Loading…</p>
+    </section>
+
+    <section class="intel-section">
+      <h3>Assignment &amp; Notes</h3>
+      <label class="detail-field field-with-save">
+        <span>Assigned to</span>
+        <select id="detailAssign" class="detail-select">
+          <option value="">—</option>${assignedOptions(lead, lead.assigned_to)}
+        </select>
+      </label>
+      <label class="detail-field field-with-save">
+        <span>Notes</span>
+        <textarea id="detailNotes" class="notes-area" rows="3" placeholder="Add note…">${escapeHtml(lead.notes || "")}</textarea>
+      </label>
+      <label class="detail-field field-with-save">
+        <span>Status</span>
+        <select id="detailStatus" class="detail-select">${statusOpts}</select>
+      </label>
+    </section>
+
+    <section class="intel-section" id="detailBriefSection">
+      <h3>AI Brief</h3>
+      <div id="detailBriefContent"></div>
+    </section>
+  `;
+
+  $("#detailAssign").addEventListener("change", (e) =>
+    onAssign(leadKey(lead), { assigned_to: e.target.value }, e.target)
+  );
+  $("#detailNotes").addEventListener("blur", (e) =>
+    onAssign(leadKey(lead), { notes: e.target.value }, e.target)
+  );
+  $("#detailStatus").addEventListener("change", (e) =>
+    onAssign(leadKey(lead), { status: e.target.value }, e.target)
+  );
+}
+
+async function loadDetailPeople(lead) {
+  const lid = leadKey(lead);
+  const date = getCurrentDate();
+  const demo = $("#demoMode").checked;
+  const officersEl = $("#detailOfficersSection");
+  const pscEl = $("#detailPscSection");
+
+  if (isMauritiusLead(lead)) {
+    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">${MU_DIRECTOR_MSG}</p>`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">${MU_DIRECTOR_MSG}</p>`;
+    return;
+  }
+
+  try {
+    const res = await fetch(
+      `/api/leads/${encodeURIComponent(lid)}/people?incorporation_date=${encodeURIComponent(date)}&demo=${demo}`
+    );
+    if (!res.ok) throw new Error("Could not load people");
+    const data = await res.json();
+    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${renderOfficersTable(data.officers || [])}`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${renderPscTable(data.psc || [])}`;
+  } catch {
+    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Could not load officer data.</p>`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Could not load PSC data.</p>`;
+  }
+}
+
+function renderOfficersTable(officers) {
+  if (!officers.length) return `<p class="muted">No officers on record.</p>`;
+  const rows = officers
+    .map(
+      (o) => `<tr>
+        <td>${escapeHtml(o.name)}</td>
+        <td>${escapeHtml(o.role || "—")}</td>
+        <td>${escapeHtml(o.nationality || "—")}</td>
+        <td>${escapeHtml(o.country_of_residence || "—")}</td>
+        <td>${escapeHtml(o.appointed_on || "—")}</td>
+      </tr>`
+    )
+    .join("");
+  return `<div class="mini-table-wrap"><table class="mini-table">
+    <thead><tr><th>Name</th><th>Role</th><th>Nationality</th><th>Country of Residence</th><th>Appointed</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function renderPscTable(psc) {
+  if (!psc.length) return `<p class="muted">No PSC records.</p>`;
+  const rows = psc
+    .map(
+      (p) => `<tr>
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.nationality || "—")}</td>
+        <td>${escapeHtml(p.country_of_residence || "—")}</td>
+        <td>${escapeHtml(p.natures_of_control || "—")}</td>
+      </tr>`
+    )
+    .join("");
+  return `<div class="mini-table-wrap"><table class="mini-table">
+    <thead><tr><th>Name</th><th>Nationality</th><th>Country of Residence</th><th>Nature of Control</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function renderBriefSection() {
+  const el = $("#detailBriefContent");
+  if (!hasOpenaiKey) {
+    el.innerHTML = `<p class="muted">AI brief available once OpenAI key is configured</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <button type="button" class="btn btn-secondary btn-sm" id="generateBriefBtn">Generate Brief</button>
+    <div id="briefOutput" class="brief-block" hidden></div>
+  `;
+  $("#generateBriefBtn").addEventListener("click", generateBrief);
+}
+
+async function loadExistingBrief(leadId) {
+  renderBriefSection();
+  if (!hasOpenaiKey) return;
+  try {
+    const res = await fetch(`/api/leads/${encodeURIComponent(leadId)}/brief`);
+    if (!res.ok) return;
+    const data = await res.json();
+    showBriefContent(data.brief);
+  } catch {
+    /* no saved brief */
+  }
+}
+
+async function generateBrief() {
+  if (!detailLead || !hasOpenaiKey) return;
+  const lid = leadKey(detailLead);
+  const btn = $("#generateBriefBtn");
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  try {
+    const res = await fetch(
+      `/api/leads/${encodeURIComponent(lid)}/brief?incorporation_date=${encodeURIComponent(getCurrentDate())}&demo=${$("#demoMode").checked}`,
+      { method: "POST" }
+    );
+    if (!res.ok) throw new Error("Brief failed");
+    const data = await res.json();
+    showBriefContent(data.brief);
+  } catch {
+    showToast("Could not generate brief", true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Generate Brief";
+  }
+}
+
+function showBriefContent(brief) {
+  const out = $("#briefOutput");
+  if (!out) return;
+  const hook = brief?.hook || brief?.summary || "";
+  const body = brief?.body || brief?.text || (typeof brief === "string" ? brief : JSON.stringify(brief, null, 2));
+  out.hidden = false;
+  out.innerHTML = hook ? `<p class="brief-hook">${escapeHtml(hook)}</p><p>${escapeHtml(body)}</p>` : `<p>${escapeHtml(body)}</p>`;
+}
+
 function init() {
-  $("#dateInput").value = yesterdayISO();
   $("#refreshBtn").addEventListener("click", () => fetchLeads(true));
-  $("#dateInput").addEventListener("change", () => fetchLeads(false));
-  $("#demoMode").addEventListener("change", () => fetchLeads(false));
+  $("#demoMode").addEventListener("change", async () => {
+    await loadAvailableDates();
+    fetchLeads(false);
+  });
   $("#exportBtn").addEventListener("click", exportCsv);
+
+  $("#datePrev").addEventListener("click", () => navigateDate(-1));
+  $("#dateNext").addEventListener("click", () => navigateDate(1));
+  $("#dateSelect").addEventListener("change", () => setSelectedDate($("#dateSelect").value));
+
+  $("#copyMuCmd").addEventListener("click", () => {
+    const cmd = $("#muPipelineCmd").textContent;
+    navigator.clipboard.writeText(cmd).then(() => showToast("Command copied"));
+  });
+
+  $("#detailClose").addEventListener("click", closeDetailPanel);
+  $("#detailBackdrop").addEventListener("click", closeDetailPanel);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && openLeadId) closeDetailPanel();
+  });
 
   $$(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -394,7 +784,9 @@ function init() {
   });
 
   applySortFromControl();
-  loadMeta().then(() => fetchLeads(false));
+  loadMeta()
+    .then(() => loadAvailableDates())
+    .then(() => fetchLeads(false));
 }
 
 init();

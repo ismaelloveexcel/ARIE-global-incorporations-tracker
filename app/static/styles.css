@@ -734,6 +734,8 @@ table {
   inset: 0;
   background: rgba(12, 21, 38, 0.35);
   z-index: 80;
+  opacity: 0;
+  transition: opacity 0.22s ease;
 }
 
 .detail-backdrop[hidden],
@@ -752,6 +754,16 @@ table {
   z-index: 90;
   display: flex;
   flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+}
+
+.detail-panel.is-open {
+  transform: translateX(0);
+}
+
+.detail-backdrop.is-open {
+  opacity: 1;
 }
 
 .detail-header {
@@ -1078,9 +1090,150 @@ body.panel-open {
 .priority-text { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; }
 .assign-cell { white-space: nowrap; }
 .saved-indicator {
-  font-size: 0.72rem;
-  color: #1a5f4a;
+  font-size: 0.82rem;
   margin-left: 0.35rem;
+}
+
+.save-feedback {
+  display: inline-block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+  vertical-align: middle;
+  position: relative;
+  z-index: 2;
+}
+
+.save-feedback.save-ok {
+  color: #0d7a52;
+}
+
+.save-feedback.save-fail {
+  color: #b42318;
+}
+
+.field-with-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Date navigator */
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.25rem;
+}
+
+.date-nav-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.date-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.date-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.date-select {
+  min-width: 12rem;
+  max-width: 16rem;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: #fff;
+  color: var(--ink);
+}
+
+.notice-mu-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.notice-mu-hint code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
+.detail-company-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+
+.jurisdiction-badge,
+.entity-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: #eef2f8;
+  color: var(--ink-muted);
+  margin-right: 0.35rem;
+}
+
+.detail-meta-line {
+  margin: 0.35rem 0;
+  font-size: 0.85rem;
+}
+
+.detail-select {
+  width: 100%;
+  font-size: 0.85rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.mini-table-wrap {
+  overflow-x: auto;
+  margin-top: 0.35rem;
+}
+
+.mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  min-width: 320px;
+}
+
+.mini-table th,
+.mini-table td {
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.mini-table th {
+  color: var(--ink-muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .notes-input {
   width: 100%;

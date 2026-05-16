@@ -31,7 +31,7 @@ from uk_leads.core import (
     fetch_uk_leads,
 )
 from uk_leads.dashboard import filter_tab_leads, lead_id
-from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path
+from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path, scan_available_dates
 from uk_leads.dev_config import load_config, save_config
 from uk_leads.enrichment import enrich_rows
 from uk_leads.health import run_health_checks
@@ -128,6 +128,11 @@ def _package_response(
     }
 
 
+@app.get("/api/available-dates")
+def api_available_dates(demo: bool = True):
+    return scan_available_dates(demo=demo)
+
+
 @app.get("/api/meta")
 def api_meta():
     config = load_config()
@@ -221,7 +226,7 @@ def api_lead_people(lead_id_key: str, incorporation_date: str | None = None, dem
             "psc": [],
             "strengths": lead.get("strengths", []),
             "cautions": lead.get("cautions", []),
-            "message": "Officer data available for UK Companies House leads only.",
+            "message": "Director data not yet available for Mauritius companies",
         }
 
     if not os.environ.get("COMPANIES_HOUSE_API_KEY"):

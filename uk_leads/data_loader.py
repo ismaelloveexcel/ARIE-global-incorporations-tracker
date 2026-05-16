@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 from pathlib import Path
 
 from uk_leads.core import csv_path_for_date, load_csv
@@ -172,3 +173,83 @@ def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict
 
     merged.sort(key=lambda r: float(r.get("score") or 0), reverse=True)
     return merged, meta
+
+
+_UK_DEMO_RE = re.compile(r"^uk-leads-demo-(\d{4}-\d{2}-\d{2})\.csv$")
+_UK_FULL_RE = re.compile(r"^uk-leads-(\d{4}-\d{2}-\d{2})\.csv$")
+_PIPELINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.csv$")
+
+
+def _date_counts_for_scan(date: str, demo: bool) -> dict:
+    uk_path = csv_path_for_date(date, demo=demo)
+    uk_count = len(load_csv(uk_path)) if uk_path.exists() else 0
+    if uk_count == 0 and demo:
+        full_path = csv_path_for_date(date, demo=False)
+        if full_path.exists():
+            uk_count = len(load_csv(full_path))
+    mu_stats = mauritius_export_stats(date)
+    return {
+        "date": date,
+        "uk_count": uk_count,
+        "mauritius_count": mu_stats.get("gbc_ac", 0),
+        "has_uk": uk_count > 0,
+        "has_mauritius": mu_stats.get("gbc_ac", 0) > 0,
+        "mauritius_export_exists": mu_stats.get("exists", False),
+    }
+
+
+def scan_available_dates(demo: bool = True) -> dict:
+    """
+    Scan exports/ for dates with UK and/or Mauritius data.
+    Returns dates (newest first), per-date counts, and recommended default.
+    """
+    exports = Path("exports")
+    if not exports.is_dir():
+        return {
+            "dates": [],
+            "date_details": [],
+            "recommended": None,
+            "reason": "No exports folder found",
+        }
+
+    discovered: set[str] = set()
+    for path in exports.iterdir():
+        if not path.is_file() or path.suffix.lower() != ".csv":
+            continue
+        name = path.name
+        for pattern in (_UK_DEMO_RE, _UK_FULL_RE, _PIPELINE_RE):
+            m = pattern.match(name)
+            if m:
+                discovered.add(m.group(1))
+                break
+
+    if not discovered:
+        return {
+            "dates": [],
+            "date_details": [],
+            "recommended": None,
+            "reason": "No export files found in exports/",
+        }
+
+    date_details = [_date_counts_for_scan(d, demo=demo) for d in sorted(discovered, reverse=True)]
+    dates_with_data = [d["date"] for d in date_details if d["has_uk"] or d["has_mauritius"]]
+    if not dates_with_data:
+        dates_with_data = [d["date"] for d in date_details]
+
+    both = [d for d in date_details if d["has_uk"] and d["has_mauritius"]]
+    if both:
+        recommended = both[0]["date"]
+        reason = "Most recent date with UK + Mauritius data"
+    elif dates_with_data:
+        recommended = dates_with_data[0]
+        reason = "Most recent date with export data (UK and/or Mauritius)"
+    else:
+        recommended = date_details[0]["date"]
+        reason = "Most recent export file date"
+
+    return {
+        "dates": dates_with_data,
+        "date_details": date_details,
+        "recommended": recommended,
+        "reason": reason,
+    }

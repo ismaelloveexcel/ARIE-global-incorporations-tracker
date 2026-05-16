@@ -29,10 +29,11 @@
           </div>
         </div>
         <div class="header-actions">
-          <label class="field-inline">
-            <span>Date</span>
-            <input type="date" id="dateInput" />
-          </label>
+          <div class="date-nav" id="dateNav" aria-label="Browse dates">
+            <button type="button" class="date-nav-btn" id="datePrev" aria-label="Previous date">← Prev</button>
+            <select id="dateSelect" class="date-select" aria-label="Select date"></select>
+            <button type="button" class="date-nav-btn" id="dateNext" aria-label="Next date">Next →</button>
+          </div>
           <label class="toggle">
             <input type="checkbox" id="demoMode" checked />
             <span>Limit UK list</span>
@@ -54,7 +55,13 @@
 
       <section class="metrics" id="metrics" aria-label="Summary metrics"></section>
       <p class="data-source-subtitle" id="dataSourceSubtitle" hidden>UK: top 25 by score · Mauritius: all</p>
-      <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden></div>
+      <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
+        <p id="mauritiusMissingText"></p>
+        <p class="notice-mu-hint" id="mauritiusMissingHint" hidden>
+          <code id="muPipelineCmd"></code>
+          <button type="button" class="btn btn-ghost btn-sm" id="copyMuCmd">Copy</button>
+        </p>
+      </div>
       <p class="last-refreshed" id="lastRefreshed"></p>
 
       <section class="filters panel">
@@ -134,6 +141,15 @@
         </div>
       </section>
     </main>
+
+    <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+    <aside class="detail-panel" id="detailPanel" hidden aria-label="Lead intelligence">
+      <header class="detail-header">
+        <h2 id="detailCompanyName">Company</h2>
+        <button type="button" class="btn-close" id="detailClose" aria-label="Close panel">×</button>
+      </header>
+      <div class="detail-body" id="detailBody"></div>
+    </aside>
 
     <div class="toast" id="toast" hidden role="status"></div>
     <script src="/static/app.js"></script>
