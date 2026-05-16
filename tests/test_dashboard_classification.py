@@ -67,7 +67,7 @@ def test_lead_id_mu_name_fallback():
 
 
 def test_round_robin_direct_pool():
-    store = {"counters": {"direct_clients": 0, "introducers": 0}}
+    store = {"counters": {"direct_counter": 0, "introducer_counter": 0}}
     pools = {"direct_clients": ["Ismael", "Tasneem"], "introducers": ["Aisha", "Stephen", "Rajesh"]}
     row = {"source": "companies_house", "company_name": "Foo Ltd"}
     a = assign_round_robin(row, pools, store)
@@ -78,7 +78,7 @@ def test_round_robin_direct_pool():
 
 def test_round_robin_dual_membership_uses_direct_pool():
     """MU GBC/AC in both tabs — Direct Clients pool wins per spec."""
-    store = {"counters": {"direct_clients": 0, "introducers": 0}}
+    store = {"counters": {"direct_counter": 0, "introducer_counter": 0}}
     pools = {"direct_clients": ["Ismael", "Tasneem"], "introducers": ["Aisha", "Stephen", "Rajesh"]}
     row = {
         "source": "mauritius_mns",

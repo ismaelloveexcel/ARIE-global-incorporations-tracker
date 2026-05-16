@@ -47,9 +47,10 @@ def pipeline_row_to_lead(row: dict[str, str], run_date: str) -> dict:
     }
 
     if source == "companies_house":
-        num = (row.get("canonical_entity_id") or row.get("company_number") or "").strip()
-        if num and str(num).isdigit():
+        num = (row.get("company_number") or row.get("canonical_entity_id") or "").strip()
+        if num:
             base["company_number"] = str(num)
+        base["sic_codes"] = (row.get("sic_codes") or "").strip().replace("|", ", ")
         base["entity_type"] = base["entity_type"] or "ltd"
         base["jurisdiction"] = base["jurisdiction"] or "UK"
         if base["company_number"]:

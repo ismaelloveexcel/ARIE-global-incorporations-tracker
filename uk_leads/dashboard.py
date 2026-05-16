@@ -29,17 +29,22 @@ _INTRODUCER_KEYWORDS = (
 )
 
 
+def _mu_gbc_or_ac(entity_type: str | None) -> bool:
+    entity = (entity_type or "").lower()
+    return any(
+        t in entity
+        for t in (
+            "global business",
+            "gbc",
+            "authorised company",
+            "authorized company",
+        )
+    )
+
+
 def is_mauritius_gbc_ac(entity_type: str | None) -> bool:
-    text = (entity_type or "").lower()
-    if not text:
-        return False
-    if "global business" in text or re.search(r"\bgbc\b", text):
-        return True
-    if "authorised company" in text or "authorized company" in text:
-        return True
-    if re.search(r"\bac\b", text):
-        return True
-    return False
+    """Backward-compatible alias for pipeline filtering."""
+    return _mu_gbc_or_ac(entity_type)
 
 
 def is_mauritius_includable(row: dict) -> bool:
@@ -47,30 +52,37 @@ def is_mauritius_includable(row: dict) -> bool:
     source = (row.get("source") or "").strip().lower()
     if source != "mauritius_mns":
         return True
-    return is_mauritius_gbc_ac(row.get("entity_type"))
+    return _mu_gbc_or_ac(row.get("entity_type"))
 
 
 def is_direct_client(row: dict) -> bool:
-    source = (row.get("source") or "").strip().lower()
+    source = row.get("source", "")
+    entity = (row.get("entity_type") or "").lower()
+
     if source == "companies_house":
         return True
+
     if source == "mauritius_mns":
-        return is_mauritius_gbc_ac(row.get("entity_type"))
+        return _mu_gbc_or_ac(entity)
+
     return False
 
 
-def _name_has_introducer_keyword(name: str) -> bool:
-    text = (name or "").lower()
-    return any(kw in text for kw in _INTRODUCER_KEYWORDS)
-
-
 def is_introducer(row: dict) -> bool:
-    source = (row.get("source") or "").strip().lower()
-    if source != "mauritius_mns":
+    source = row.get("source", "")
+    entity = (row.get("entity_type") or "").lower()
+    name = (row.get("company_name") or "").lower()
+
+    if source == "companies_house":
         return False
-    if not is_mauritius_gbc_ac(row.get("entity_type")):
-        return False
-    return _name_has_introducer_keyword(row.get("company_name", ""))
+
+    if source == "mauritius_mns":
+        is_gbc_or_ac = _mu_gbc_or_ac(entity)
+        if not is_gbc_or_ac:
+            return False
+        return any(kw in name for kw in _INTRODUCER_KEYWORDS)
+
+    return False
 
 
 def lead_id(row: dict) -> str:

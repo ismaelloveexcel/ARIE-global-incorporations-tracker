@@ -21,6 +21,7 @@ exports/
 exports/debug/
 snapshots/
 data/
+data/assignments.json.lock
 
 # Logs
 logs

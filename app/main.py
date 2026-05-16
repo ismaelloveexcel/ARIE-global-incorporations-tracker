@@ -219,14 +219,17 @@ def api_refresh(
 
 @app.patch("/api/leads/{lead_id_key}")
 def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
-    entry = assignments.set_assignment(
-        lead_id_key,
-        assigned_to=body.assigned_to,
-        notes=body.notes,
-        status=body.status,
-        contacted_at=body.contacted_at,
-        follow_up_at=body.follow_up_at,
-    )
+    try:
+        entry = assignments.set_assignment(
+            lead_id_key,
+            assigned_to=body.assigned_to,
+            notes=body.notes,
+            status=body.status,
+            contacted_at=body.contacted_at,
+            follow_up_at=body.follow_up_at,
+        )
+    except assignments.AssignmentLockError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"lead_id": lead_id_key, **entry}
 
 

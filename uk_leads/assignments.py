@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+from filelock import FileLock, Timeout
 
 from uk_leads.dashboard import assignment_pool_for_lead, lead_id
 
-ASSIGNMENTS_PATH = Path("data") / "assignments.json"
+logger = logging.getLogger(__name__)
+
+ASSIGNMENTS_FILE = Path("data") / "assignments.json"
+LOCK_FILE = Path("data") / "assignments.json.lock"
 
 WORKFLOW_STATUSES = [
     "Not contacted",
@@ -22,43 +28,88 @@ DEFAULT_POOLS = {
     "introducers": ["Aisha", "Stephen", "Rajesh"],
 }
 
+LOCK_TIMEOUT_SECONDS = 10
+LOCK_WRITE_MESSAGE = (
+    "Assignment save failed — file is locked, please try again in a moment"
+)
+
+
+class AssignmentLockError(Exception):
+    """Raised when assignments.json cannot be locked for writing."""
+
+
+def _normalize_counters(counters: dict | None) -> dict:
+    counters = dict(counters or {})
+    direct = counters.get("direct_counter")
+    if direct is None:
+        direct = counters.get("direct_clients", 0)
+    intro = counters.get("introducer_counter")
+    if intro is None:
+        intro = counters.get("introducers", 0)
+    return {"direct_counter": int(direct or 0), "introducer_counter": int(intro or 0)}
+
 
 def _empty_store() -> dict:
-    return {"leads": {}, "counters": {"direct_clients": 0, "introducers": 0}}
+    return {"leads": {}, "counters": {"direct_counter": 0, "introducer_counter": 0}}
 
 
-def _load_store() -> dict:
-    if not ASSIGNMENTS_PATH.exists():
-        return _empty_store()
+def _load() -> dict:
+    lock = FileLock(LOCK_FILE, timeout=LOCK_TIMEOUT_SECONDS)
     try:
-        with ASSIGNMENTS_PATH.open(encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (json.JSONDecodeError, OSError):
+        with lock:
+            if not ASSIGNMENTS_FILE.exists():
+                return _empty_store()
+            try:
+                with ASSIGNMENTS_FILE.open(encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (json.JSONDecodeError, OSError):
+                return _empty_store()
+
+            if "leads" in data:
+                store = data
+                store["counters"] = _normalize_counters(store.get("counters"))
+                return store
+
+            leads = {}
+            for key, entry in data.items():
+                if key in ("counters", "leads"):
+                    continue
+                if isinstance(entry, dict):
+                    leads[key] = entry
+            return {
+                "leads": leads,
+                "counters": _normalize_counters(data.get("counters")),
+            }
+    except Timeout:
+        logger.warning("Could not acquire assignments lock for read within %ss", LOCK_TIMEOUT_SECONDS)
+        if ASSIGNMENTS_FILE.exists():
+            try:
+                with ASSIGNMENTS_FILE.open(encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if "leads" in data:
+                    data["counters"] = _normalize_counters(data.get("counters"))
+                    return data
+            except (json.JSONDecodeError, OSError):
+                pass
         return _empty_store()
 
-    if "leads" in data:
-        store = data
-        store.setdefault("counters", {"direct_clients": 0, "introducers": 0})
-        return store
 
-    # Migrate legacy flat {company_number: {...}} format
-    leads = {}
-    for key, entry in data.items():
-        if key in ("counters", "leads"):
-            continue
-        if isinstance(entry, dict):
-            leads[key] = entry
-    return {"leads": leads, "counters": {"direct_clients": 0, "introducers": 0}}
-
-
-def _save_store(store: dict) -> None:
-    ASSIGNMENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with ASSIGNMENTS_PATH.open("w", encoding="utf-8") as fh:
-        json.dump(store, fh, indent=2)
+def _save(data: dict) -> None:
+    lock = FileLock(LOCK_FILE, timeout=LOCK_TIMEOUT_SECONDS)
+    try:
+        with lock:
+            ASSIGNMENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = dict(data)
+            payload["counters"] = _normalize_counters(payload.get("counters"))
+            with ASSIGNMENTS_FILE.open("w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2)
+    except Timeout as exc:
+        logger.warning("Could not acquire assignments lock for write within %ss", LOCK_TIMEOUT_SECONDS)
+        raise AssignmentLockError(LOCK_WRITE_MESSAGE) from exc
 
 
 def get(lead_id_key: str) -> dict:
-    return _load_store()["leads"].get(lead_id_key, {})
+    return _load()["leads"].get(lead_id_key, {})
 
 
 def set_assignment(
@@ -69,7 +120,7 @@ def set_assignment(
     contacted_at: str | None = None,
     follow_up_at: str | None = None,
 ) -> dict:
-    store = _load_store()
+    store = _load()
     entry = store["leads"].get(lead_id_key, {})
     if assigned_to is not None:
         entry["assigned_to"] = assigned_to
@@ -84,12 +135,14 @@ def set_assignment(
     if "status" not in entry:
         entry.setdefault("status", "Not contacted")
     store["leads"][lead_id_key] = entry
-    _save_store(store)
+    _save(store)
     return entry
 
 
 def _pool_counter_key(pool_name: str) -> str:
-    return "direct_clients" if pool_name == "direct_clients" else "introducers"
+    if pool_name == "direct_clients":
+        return "direct_counter"
+    return "introducer_counter"
 
 
 def assign_round_robin(row: dict, pools: dict[str, list[str]], store: dict) -> str:
@@ -103,16 +156,19 @@ def assign_round_robin(row: dict, pools: dict[str, list[str]], store: dict) -> s
     if members is direct or members == direct:
         pool_key = "direct_clients"
 
-    counter = store["counters"].get(pool_key, 0)
+    counters = _normalize_counters(store.get("counters"))
+    counter_key = _pool_counter_key(pool_key)
+    counter = counters.get(counter_key, 0)
     person = members[counter % len(members)]
-    store["counters"][pool_key] = counter + 1
+    counters[counter_key] = counter + 1
+    store["counters"] = counters
     return person
 
 
 def apply_assignments(rows: list[dict], pools: dict[str, list[str]] | None = None) -> list[dict]:
     """Merge saved assignments; apply round-robin defaults for unassigned leads."""
     pools = pools or DEFAULT_POOLS
-    store = _load_store()
+    store = _load()
     dirty = False
 
     for row in rows:
@@ -134,7 +190,7 @@ def apply_assignments(rows: list[dict], pools: dict[str, list[str]] | None = Non
         row["follow_up_at"] = entry.get("follow_up_at") or ""
 
     if dirty:
-        _save_store(store)
+        _save(store)
 
     return rows
 

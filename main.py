@@ -443,7 +443,42 @@ _CSV_FIELDS = [
     "score",
     "source",
     "canonical_entity_id",
+    "company_number",
+    "file_no",
+    "sic_codes",
 ]
+
+
+def _record_to_csv_row(record: CompanyRecord) -> dict:
+    raw = record.raw_data or {}
+
+    if record.source == "companies_house":
+        company_number = raw.get("company_number", "")
+        file_no = ""
+        sic_list = raw.get("sic_codes", []) or []
+        sic_codes = "|".join(str(s) for s in sic_list)
+    elif record.source == "mauritius_mns":
+        company_number = ""
+        file_no = raw.get("file_no", "")
+        sic_codes = ""
+    else:
+        company_number = ""
+        file_no = ""
+        sic_codes = ""
+
+    return {
+        "company_name": record.company_name,
+        "normalized_name": record.normalized_name or "",
+        "jurisdiction": record.jurisdiction,
+        "entity_type": record.entity_type or "",
+        "incorporation_date": record.incorporation_date or "",
+        "score": record.score if record.score is not None else "",
+        "source": record.source,
+        "canonical_entity_id": record.canonical_entity_id or "",
+        "company_number": company_number,
+        "file_no": file_no,
+        "sic_codes": sic_codes,
+    }
 
 
 def export_csv(records: list[CompanyRecord], run_date: str) -> Path:
@@ -459,7 +494,7 @@ def export_csv(records: list[CompanyRecord], run_date: str) -> Path:
         writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for record in records:
-            writer.writerow(record.to_db_dict())
+            writer.writerow(_record_to_csv_row(record))
 
     logger.info("CSV snapshot written to %s (%d rows).", filepath, len(records))
     return filepath
