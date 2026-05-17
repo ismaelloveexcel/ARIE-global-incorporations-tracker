@@ -103,7 +103,8 @@ Use **Strong prospects (40+)** (default filter), **Review high priority**, the *
 
 ## Independent review
 
-See [`docs/INDEPENDENT_REVIEW_PROMPT.md`](docs/INDEPENDENT_REVIEW_PROMPT.md) for a copy-paste prompt to run a full-repo review focused on growth and operational efficiency for Arie Finance.
+- **Full production audit (recommended):** [`docs/INDEPENDENT_AUDIT_PROMPT.md`](docs/INDEPENDENT_AUDIT_PROMPT.md) — end-to-end, line-by-line, demo→production, missing data, AI/workarounds.  
+- **Shorter growth review:** [`docs/INDEPENDENT_REVIEW_PROMPT.md`](docs/INDEPENDENT_REVIEW_PROMPT.md).
 
 ## Legacy
 

@@ -1,5 +1,7 @@
 # Independent agent review prompt — ARIE Global Incorporations Tracker
 
+> **For a full production + lead-generation audit (line-by-line, demo→production, missing data, AI/workarounds):** use **[`INDEPENDENT_AUDIT_PROMPT.md`](INDEPENDENT_AUDIT_PROMPT.md)**.
+
 Copy everything below the line into a **fresh** agent session with full repo access. The agent should read the codebase and README first, then produce a structured report.
 
 ---
