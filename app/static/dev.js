@@ -218,7 +218,7 @@ async function loadOverview() {
   const stats = data.assignment_stats || {};
   let html = `
     <div class="dev-stat"><strong>${data.direct_clients_count ?? 0}</strong><span>Direct Clients</span></div>
-    <div class="dev-stat"><strong>${data.introducers_count ?? 0}</strong><span>Introducers</span></div>
+    <div class="dev-stat"><strong>${data.auto_introducer_queue_count ?? 0}</strong><span>Auto introducer queue (manual only)</span></div>
     <div class="dev-stat"><strong>${data.unassigned ?? 0}</strong><span>Unassigned</span></div>`;
   Object.entries(stats).forEach(([name, count]) => {
     html += `<div class="dev-stat"><strong>${count}</strong><span>${esc(name)}</span></div>`;

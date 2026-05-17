@@ -132,6 +132,15 @@ def _find_lead(lead_id_key: str, incorporation_date: str | None = None, demo: bo
     return None
 
 
+def _normalize_tab(tab: str | None) -> str:
+    """Operator UI uses direct_clients only; introducers tab is deprecated (empty list)."""
+    if tab in (None, "", "direct_clients"):
+        return "direct_clients"
+    if tab == "introducers":
+        return "introducers"
+    return "direct_clients"
+
+
 def _package_response(
     rows: list[dict],
     tab: str | None,
@@ -141,14 +150,13 @@ def _package_response(
     last_refreshed: str | None = None,
     total_fetched: int | None = None,
 ) -> dict:
-    all_rows = rows
-    if tab in ("direct_clients", "introducers"):
-        rows = filter_tab_leads(rows, tab)
+    queue_tab = _normalize_tab(tab)
+    rows = filter_tab_leads(rows, queue_tab)
 
     return {
         "incorporation_date": incorporation_date,
         "demo": demo,
-        "tab": tab,
+        "tab": queue_tab,
         "count": len(rows),
         "total_fetched": total_fetched,
         "last_refreshed": last_refreshed,
@@ -156,7 +164,6 @@ def _package_response(
         "leads": rows,
         "meta": meta,
         "team": TEAM_MEMBERS,
-        "show_uk_introducer_notice": tab == "introducers",
     }
 
 
@@ -200,7 +207,10 @@ def api_meta():
 def api_leads(
     incorporation_date: str | None = None,
     demo: bool = True,
-    tab: str | None = Query(None, description="direct_clients | introducers"),
+    tab: str | None = Query(
+        None,
+        description="Queue tab: direct_clients (default). introducers is deprecated and returns an empty list.",
+    ),
 ):
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
     rows, meta = _load_merged_rows(d, demo=demo)
@@ -454,13 +464,12 @@ def api_dev_stats(incorporation_date: str | None = None, demo: bool = True):
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
     rows, _ = _load_merged_rows(d, demo=demo)
     direct = filter_tab_leads(rows, "direct_clients")
-    intro = filter_tab_leads(rows, "introducers")
     return {
         "date": d,
         "assignment_stats": assignments.assignment_stats(rows),
         "unassigned": sum(1 for r in rows if not (r.get("assigned_to") or "").strip()),
         "direct_clients_count": len(direct),
-        "introducers_count": len(intro),
+        "auto_introducer_queue_count": 0,
     }
 
 

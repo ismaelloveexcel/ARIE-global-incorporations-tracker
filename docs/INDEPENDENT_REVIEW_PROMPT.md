@@ -104,6 +104,27 @@ Do **not** recommend a React rewrite unless strongly justified.
 7. **90-day roadmap** — three phases, outcome-oriented  
 8. **Open questions** for the team (max 5)  
 
+## Verifying tests (required)
+
+From the **repository root**, run:
+
+```bash
+python -m pytest -q
+```
+
+- Report the **exact pass/fail count** and command used.  
+- If collection fails, show the **full error** — do not claim “tests are broken” without it.  
+- A healthy local suite can still lack CI enforcement; check `.github/workflows/test.yml` for PR test runs.  
+- Distinguish **“no CI on PRs”** (engineering gap) from **“pytest fails”** (regression).
+
+## Classification contract (verify in code)
+
+Read `docs/CLASSIFICATION.md` before critiquing introducers:
+
+- **Operator queue** = `direct_clients` only (automatic).  
+- **`tab=introducers`** = deprecated, returns `[]` — legacy API, not an active product bug.  
+- **`is_introducer()` / `lead_type`** = metadata hints only unless explicitly scoped to enrichment.
+
 ## Constraints for the reviewer
 
 - Read actual code; do not assume features from this prompt alone.  

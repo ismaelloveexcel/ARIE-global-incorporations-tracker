@@ -11,7 +11,7 @@ The app turns **official registry feeds** (UK Companies House + Mauritius GBC/AC
 | **Direct clients** | **Automatic** — pipeline + dashboard (`/`) show newly incorporated companies to onboard as Arie clients. |
 | **Introducers** | **Manual** — referral partners (management firms, professional services, etc.) are **not** auto-split into a second tab. Track them outside this queue or in your CRM until a manual introducers feature exists. |
 
-Name-based hints in the detail panel (e.g. “fiduciary / professional services”) are for **scoring context only** — they do not create a duplicate list.
+Name-based hints in the detail panel (e.g. “fiduciary / professional services”) are for **scoring context only** — they do not create a duplicate list. See [`docs/CLASSIFICATION.md`](docs/CLASSIFICATION.md) for the full contract.
 
 ## Quick start
 
@@ -71,8 +71,10 @@ app/main.py (FastAPI)      →  /api/leads, static operator UI
 ## Tests
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest -q
 ```
+
+Run from the **repository root** (same command as CI). Do not report “tests broken” without this exact command and the error output.
 
 ## Repository layout
 

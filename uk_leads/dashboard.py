@@ -69,6 +69,7 @@ def is_direct_client(row: dict) -> bool:
 
 
 def is_introducer(row: dict) -> bool:
+    """Name-keyword detector for metadata/tests — not used for operator queue tabs."""
     source = row.get("source", "")
     entity = (row.get("entity_type") or "").lower()
     name = (row.get("company_name") or "").lower()
