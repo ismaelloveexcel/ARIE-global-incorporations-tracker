@@ -97,10 +97,54 @@
   padding: 0.85rem 1rem;
   font-size: 0.85rem;
 }
-.health-card.ok { border-left: 3px solid var(--dev-ok); }
-.health-card.warning, .health-card.pending { border-left: 3px solid var(--dev-warn); }
-.health-card.error { border-left: 3px solid var(--dev-err); }
-.health-card strong { display: block; margin-bottom: 0.25rem; }
+.health-card.ok {
+  background: #f0fdf4;
+  border-left: 4px solid #16a34a;
+}
+.health-card.warning,
+.health-card.pending {
+  background: #fffbeb;
+  border-left: 4px solid #d97706;
+}
+.health-card.error {
+  background: #fef2f2;
+  border-left: 4px solid #dc2626;
+}
+.health-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.health-card-head strong {
+  color: #0f1419;
+  font-size: 0.92rem;
+}
+.health-card-message {
+  margin: 0 0 0.25rem;
+  color: var(--dev-muted);
+  line-height: 1.45;
+}
+.health-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+}
+.health-pill--ok {
+  background: rgba(22, 163, 74, 0.15);
+  color: #16a34a;
+}
+.health-pill--warn {
+  background: rgba(217, 119, 6, 0.15);
+  color: #d97706;
+}
+.health-pill--error {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
 .health-fixes { margin-top: 1rem; }
 .health-fixes p {
   background: rgba(245, 101, 101, 0.1);

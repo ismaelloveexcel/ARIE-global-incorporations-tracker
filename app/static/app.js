@@ -18,6 +18,16 @@ let currentDate = "";
 let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
+const TABLE_COLSPAN = 11;
+let appHasDates = false;
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function pipelineCommandToday() {
+  return `python main.py --date ${todayISO()} --skip-difc`;
+}
 
 function escapeHtml(s) {
   const d = document.createElement("div");
@@ -93,15 +103,35 @@ async function loadMeta() {
 
 async function loadAvailableDates() {
   const demo = $("#demoMode").checked;
-  const res = await fetch(`/api/available-dates?demo=${demo}`);
-  const data = await res.json();
-  availableDates = data.dates || [];
-  dateDetails = data.date_details || [];
-  const recommended = data.recommended || availableDates[0] || "";
-  currentDate = recommended;
-  renderDateSelect();
-  updateDateNavButtons();
-  return recommended;
+  try {
+    const res = await fetch(`/api/available-dates?demo=${demo}`);
+    if (!res.ok) {
+      availableDates = [];
+      dateDetails = [];
+      currentDate = "";
+      appHasDates = false;
+      renderDateSelect();
+      updateDateNavButtons();
+      return "";
+    }
+    const data = await res.json();
+    availableDates = data.dates || [];
+    dateDetails = data.date_details || [];
+    const recommended = data.recommended || availableDates[0] || "";
+    currentDate = recommended;
+    appHasDates = availableDates.length > 0;
+    renderDateSelect();
+    updateDateNavButtons();
+    return appHasDates ? recommended : "";
+  } catch {
+    availableDates = [];
+    dateDetails = [];
+    currentDate = "";
+    appHasDates = false;
+    renderDateSelect();
+    updateDateNavButtons();
+    return "";
+  }
 }
 
 function dateDetail(date) {
@@ -118,8 +148,20 @@ function dateOptionLabel(d) {
 
 function renderDateSelect() {
   const sel = $("#dateSelect");
-  sel.innerHTML = "";
+  const emptyEl = $("#dateSelectEmpty");
   const list = availableDates.length ? availableDates : dateDetails.map((d) => d.date);
+
+  if (!list.length) {
+    sel.hidden = true;
+    sel.innerHTML = "";
+    emptyEl.hidden = false;
+    currentDate = "";
+    return;
+  }
+
+  sel.hidden = false;
+  emptyEl.hidden = true;
+  sel.innerHTML = "";
   list.forEach((d) => {
     const opt = document.createElement("option");
     opt.value = d;
@@ -135,6 +177,11 @@ function renderDateSelect() {
 }
 
 function updateDateNavButtons() {
+  if (!availableDates.length) {
+    $("#datePrev").disabled = true;
+    $("#dateNext").disabled = true;
+    return;
+  }
   const idx = availableDates.indexOf(getCurrentDate());
   $("#datePrev").disabled = idx < 0 || idx >= availableDates.length - 1;
   $("#dateNext").disabled = idx <= 0;
@@ -150,8 +197,11 @@ function navigateDate(delta) {
 
 function setSelectedDate(date) {
   currentDate = date;
-  $("#dateSelect").value = date;
+  if ($("#dateSelect") && !$("#dateSelect").hidden) {
+    $("#dateSelect").value = date;
+  }
   updateDateNavButtons();
+  fetchDataStatus();
   fetchLeads(false);
 }
 
@@ -184,6 +234,20 @@ function countUkMu(rows) {
   return { uk, mu };
 }
 
+function renderMetricsZeroState() {
+  $("#metrics").innerHTML = `
+    <div class="metric-card"><strong>—</strong><span>Total leads</span></div>
+    <div class="metric-card accent"><strong>—</strong><span>High priority</span></div>
+    <div class="metric-card"><strong>—</strong><span>Assigned</span></div>
+    <div class="metric-card"><strong>—</strong><span>Unassigned</span></div>
+    <p class="metric-jurisdiction">UK: — · Mauritius: —</p>
+  `;
+  $("#lastRefreshed").textContent = "";
+  const tabLabel = activeTab === "introducers" ? "Introducers" : "Direct Clients";
+  $("#panelTitle").textContent = tabLabel;
+  $("#panelSubtitle").textContent = "No data loaded";
+}
+
 function renderMetrics(payload) {
   const m = payload.metrics || {};
   const meta = payload.meta || {};
@@ -212,6 +276,69 @@ function renderMetrics(payload) {
 }
 
 let copyCmdTimer = null;
+
+function wireBannerCopyButton(btn, raw) {
+  if (!btn || !raw) return;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(raw);
+      btn.textContent = "Copied ✓";
+      clearTimeout(copyCmdTimer);
+      copyCmdTimer = setTimeout(() => {
+        btn.textContent = btn.dataset.defaultLabel || "Copy";
+      }, 2000);
+    } catch {
+      showToast("Could not copy", true);
+    }
+  });
+}
+
+function renderNoEnvironmentDataBanner() {
+  const cmd = pipelineCommandToday();
+  const el = $("#dataStatusBanner");
+  if (bannerHideTimer) {
+    clearTimeout(bannerHideTimer);
+    bannerHideTimer = null;
+  }
+  el.className = "data-status-banner data-status-banner--amber";
+  el.hidden = false;
+  el.innerHTML = `<p class="data-status-text">⚠ No pipeline data found for this environment. Run the pipeline to generate today's leads.
+    <span class="data-status-cmd-wrap"><code class="data-status-cmd">${escapeHtml(cmd)}</code>
+    <button type="button" class="data-status-copy" data-default-label="Copy">Copy</button></span>
+    <a class="data-status-link" href="/dev" target="_blank" rel="noopener">Open /dev →</a></p>`;
+  wireBannerCopyButton(el.querySelector(".data-status-copy"), cmd);
+}
+
+function showTableEmptyState() {
+  const body = $("#leadsBody");
+  body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
+    <div class="table-empty-state">
+      <span class="table-empty-state__mark" aria-hidden="true">A</span>
+      <p class="brand-eyebrow table-empty-state__eyebrow">Arie Finance</p>
+      <h3 class="table-empty-state__title">No lead data available</h3>
+      <p class="table-empty-state__text">The pipeline has not run yet for this environment, or no data exists for the selected date.</p>
+      <div class="table-empty-state__actions">
+        <button type="button" class="btn btn-primary" id="emptyRefreshUk">Refresh UK Leads</button>
+        <button type="button" class="btn btn-secondary" id="emptyCopyMu">Run Mauritius Pipeline</button>
+        <a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Open Health Check →</a>
+      </div>
+    </div>
+  </td></tr>`;
+
+  $("#emptyRefreshUk")?.addEventListener("click", () => fetchLeads(true));
+  $("#emptyCopyMu")?.addEventListener("click", async () => {
+    const cmd = pipelineCommandToday();
+    try {
+      await navigator.clipboard.writeText(cmd);
+      $("#emptyCopyMu").textContent = "Copied ✓";
+      setTimeout(() => {
+        $("#emptyCopyMu").textContent = "Run Mauritius Pipeline";
+      }, 2000);
+    } catch {
+      showToast("Could not copy command", true);
+    }
+  });
+}
 
 function renderDataStatusBanner(status) {
   const el = $("#dataStatusBanner");
@@ -244,20 +371,9 @@ function renderDataStatusBanner(status) {
   el.innerHTML = `<p class="data-status-text">${icon} ${escapeHtml(banner.message)}${actions}</p>`;
 
   const copyBtn = el.querySelector(".data-status-copy");
-  if (copyBtn) {
-    copyBtn.addEventListener("click", async () => {
-      const raw = banner.pipeline_command;
-      try {
-        await navigator.clipboard.writeText(raw);
-        copyBtn.textContent = "Copied ✓";
-        clearTimeout(copyCmdTimer);
-        copyCmdTimer = setTimeout(() => {
-          copyBtn.textContent = "Copy";
-        }, 2000);
-      } catch {
-        showToast("Could not copy", true);
-      }
-    });
+  if (copyBtn && banner.pipeline_command) {
+    copyBtn.dataset.defaultLabel = "Copy";
+    wireBannerCopyButton(copyBtn, banner.pipeline_command);
   }
 
   if (banner.auto_hide_seconds) {
@@ -269,18 +385,28 @@ function renderDataStatusBanner(status) {
 }
 
 async function fetchDataStatus() {
-  const date = getCurrentDate();
-  if (!date) return;
+  if (!appHasDates && !getCurrentDate()) {
+    renderNoEnvironmentDataBanner();
+    return;
+  }
+  const date = getCurrentDate() || todayISO();
   const demo = $("#demoMode").checked;
   try {
     const res = await fetch(
       `/api/data-status?date=${encodeURIComponent(date)}&demo=${demo}`
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (!appHasDates) renderNoEnvironmentDataBanner();
+      return;
+    }
     const data = await res.json();
+    if (!appHasDates && (!data.banner || data.banner.type === "none")) {
+      renderNoEnvironmentDataBanner();
+      return;
+    }
     renderDataStatusBanner(data);
   } catch {
-    /* banner is non-blocking */
+    if (!appHasDates) renderNoEnvironmentDataBanner();
   }
 }
 
@@ -309,6 +435,33 @@ function applySortFromControl() {
   sortKey = key;
   sortDir = dir;
   updateSortHeaders();
+}
+
+function hasActiveFilters() {
+  return (
+    ($("#filterSearch").value || "").trim() !== "" ||
+    $("#filterPriority").value !== "" ||
+    $("#filterAssigned").value !== "" ||
+    $("#filterJurisdiction").value !== "" ||
+    ($("#filterSort").value || "score-desc") !== "score-desc"
+  );
+}
+
+function updateResetFiltersVisibility() {
+  const btn = $("#resetFilters");
+  if (btn) btn.hidden = !hasActiveFilters();
+}
+
+function resetFilters() {
+  $("#filterSearch").value = "";
+  $("#filterPriority").value = "";
+  $("#filterAssigned").value = "";
+  $("#filterJurisdiction").value = "";
+  $("#filterSort").value = "score-desc";
+  applySortFromControl();
+  renderTable();
+  renderMetricsFromFiltered();
+  updateResetFiltersVisibility();
 }
 
 function getFilteredLeads() {
@@ -378,12 +531,28 @@ function verifyCell(lead) {
   return `<a class="btn btn-verify" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Verify</a>`;
 }
 
+function notesCell(lead) {
+  const lid = leadKey(lead);
+  const notes = (lead.notes || "").trim();
+  if (notes) {
+    const preview = escapeHtml(notes.length > 30 ? `${notes.slice(0, 30)}…` : notes);
+    return `<button type="button" class="notes-indicator notes-indicator--has" data-lead-id="${escapeHtml(lid)}" title="${escapeHtml(notes)}">📝 <span class="notes-preview">${preview}</span></button>`;
+  }
+  return `<button type="button" class="notes-indicator" data-lead-id="${escapeHtml(lid)}">+ Add note</button>`;
+}
+
 function renderTable() {
   const body = $("#leadsBody");
+  if (!appHasDates && !allLeads.length) {
+    showTableEmptyState();
+    return;
+  }
+
   const filtered = sortLeads(getFilteredLeads());
+  updateResetFiltersVisibility();
 
   if (!filtered.length) {
-    body.innerHTML = `<tr><td colspan="10" class="empty">No leads match your filters.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty">No leads match your filters.</td></tr>`;
     return;
   }
 
@@ -405,18 +574,16 @@ function renderTable() {
               <option value="">—</option>${assignedOptions(lead)}
             </select>
           </td>
-          <td>
-            <input type="text" class="notes-input" data-lead-id="${escapeHtml(lid)}"
-              value="${escapeHtml(lead.notes || "")}" placeholder="Add note…" />
-          </td>
+          <td class="notes-cell">${notesCell(lead)}</td>
           <td>${verifyCell(lead)}</td>
+          <td class="col-chevron" aria-hidden="true"><span class="row-chevron">›</span></td>
         </tr>`;
     })
     .join("");
 
   body.querySelectorAll(".lead-row").forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest("select, input, a, button")) return;
+      if (e.target.closest("select, a, button")) return;
       openDetailPanel(row.dataset.leadId);
     });
   });
@@ -426,12 +593,21 @@ function renderTable() {
     sel.addEventListener("change", () => onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel));
   });
 
-  body.querySelectorAll(".notes-input").forEach((inp) => {
-    inp.addEventListener("click", (e) => e.stopPropagation());
-    inp.addEventListener("change", () => onAssign(inp.dataset.leadId, { notes: inp.value }, inp));
+  body.querySelectorAll(".notes-indicator").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDetailPanel(btn.dataset.leadId);
+    });
   });
 
   updateSortHeaders();
+  updateTableScrollHint();
+}
+
+function updateTableScrollHint() {
+  const wrap = document.querySelector(".table-wrap");
+  if (!wrap) return;
+  wrap.classList.toggle("is-scrollable", wrap.scrollWidth > wrap.clientWidth + 2);
 }
 
 async function onAssign(leadId, patch, anchorEl) {
@@ -466,8 +642,8 @@ function syncTableFromLead(lead) {
   if (!row) return;
   const sel = row.querySelector(".assign-select");
   if (sel) sel.value = lead.assigned_to || "";
-  const notes = row.querySelector(".notes-input");
-  if (notes) notes.value = lead.notes || "";
+  const notesCellEl = row.querySelector(".notes-cell");
+  if (notesCellEl) notesCellEl.innerHTML = notesCell(lead);
 }
 
 function renderMetricsFromFiltered() {
@@ -490,7 +666,12 @@ function renderMetricsFromFiltered() {
 async function fetchLeads(refresh = false) {
   const date = getCurrentDate();
   const demo = $("#demoMode").checked;
-  if (!date) return;
+  if (!date) {
+    renderMetricsZeroState();
+    showTableEmptyState();
+    fetchDataStatus();
+    return;
+  }
   setLoading(true, refresh ? "Fetching UK from Companies House…" : "Loading leads…");
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(activeTab)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
@@ -511,7 +692,6 @@ async function fetchLeads(refresh = false) {
     $("#dateSelect").value = currentDate;
     renderMetrics(data);
     renderTable();
-    await fetchDataStatus();
     if (openLeadId) {
       const still = allLeads.find((l) => leadKey(l) === openLeadId);
       if (still) openDetailPanel(openLeadId, true);
@@ -520,15 +700,19 @@ async function fetchLeads(refresh = false) {
     showToast(refresh ? `Refreshed — ${data.count} leads in view` : `Loaded ${data.count} leads`);
   } catch (e) {
     showToast(e.message || "Failed to load", true);
-    $("#leadsBody").innerHTML = `<tr><td colspan="10" class="empty">${escapeHtml(e.message)}</td></tr>`;
+    renderMetricsZeroState();
+    showTableEmptyState();
+    fetchDataStatus();
   } finally {
     setLoading(false);
+    fetchDataStatus();
   }
 }
 
 function switchTab(tab) {
   activeTab = tab;
   $$(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tab));
+  fetchDataStatus();
   fetchLeads(false);
 }
 
@@ -851,6 +1035,12 @@ function init() {
   $("#refreshBtn").addEventListener("click", () => fetchLeads(true));
   $("#demoMode").addEventListener("change", async () => {
     await loadAvailableDates();
+    fetchDataStatus();
+    if (!appHasDates) {
+      renderMetricsZeroState();
+      showTableEmptyState();
+      return;
+    }
     fetchLeads(false);
   });
   $("#exportBtn").addEventListener("click", exportCsv);
@@ -877,7 +1067,9 @@ function init() {
   const rerender = () => {
     renderTable();
     renderMetricsFromFiltered();
+    updateResetFiltersVisibility();
   };
+  $("#resetFilters")?.addEventListener("click", resetFilters);
   $("#filterSearch").addEventListener("input", rerender);
   $("#filterPriority").addEventListener("change", rerender);
   $("#filterAssigned").addEventListener("change", rerender);
@@ -902,9 +1094,33 @@ function init() {
   });
 
   applySortFromControl();
+
+  const header = $(".header");
+  const tableWrap = document.querySelector(".table-wrap");
+
+  function handleScroll() {
+    const scrolled =
+      window.scrollY > 60 || (tableWrap && tableWrap.scrollTop > 60);
+    header?.classList.toggle("header--compact", scrolled);
+  }
+
+  window.addEventListener("scroll", handleScroll, { passive: true });
+
+  if (tableWrap) {
+    tableWrap.addEventListener("scroll", handleScroll, { passive: true });
+  }
+
   loadMeta()
     .then(() => loadAvailableDates())
-    .then(() => fetchLeads(false));
+    .then((date) => {
+      fetchDataStatus();
+      if (!date) {
+        renderMetricsZeroState();
+        showTableEmptyState();
+        return;
+      }
+      return fetchLeads(false);
+    });
 }
 
 init();

@@ -183,6 +183,12 @@ function statusClass(st) {
   return "warning";
 }
 
+function healthStatusPill(status) {
+  if (status === "ok") return '<span class="health-pill health-pill--ok">✅ OK</span>';
+  if (status === "error") return '<span class="health-pill health-pill--error">❌ Error</span>';
+  return '<span class="health-pill health-pill--warn">⚠ Warning</span>';
+}
+
 async function runHealth() {
   const date = $("#devDate").value;
   const res = await fetch(`/api/dev/health?incorporation_date=${encodeURIComponent(date)}`);
@@ -191,8 +197,11 @@ async function runHealth() {
     .map(
       (c) => `
     <article class="health-card ${statusClass(c.status)}">
-      <strong>${esc(c.name)}</strong>
-      <span>${esc(c.message)}</span>
+      <div class="health-card-head">
+        <strong>${esc(c.name)}</strong>
+        ${healthStatusPill(c.status)}
+      </div>
+      <p class="health-card-message">${esc(c.message)}</p>
       ${c.ago ? `<span class="muted">${esc(c.ago)}</span>` : ""}
     </article>`
     )

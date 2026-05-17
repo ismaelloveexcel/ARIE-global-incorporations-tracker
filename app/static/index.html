@@ -32,6 +32,7 @@
           <div class="date-nav" id="dateNav" aria-label="Browse dates">
             <button type="button" class="date-nav-btn" id="datePrev" aria-label="Previous date">← Prev</button>
             <select id="dateSelect" class="date-select" aria-label="Select date"></select>
+            <span id="dateSelectEmpty" class="date-select-empty" hidden>No data available</span>
             <button type="button" class="date-nav-btn" id="dateNext" aria-label="Next date">Next →</button>
           </div>
           <label class="toggle">
@@ -67,6 +68,7 @@
       <p class="last-refreshed" id="lastRefreshed"></p>
 
       <section class="filters panel">
+        <div class="filters-row">
         <div class="filters-grid">
           <label>
             <span>Search</span>
@@ -108,6 +110,8 @@
             </select>
           </label>
         </div>
+        <button type="button" class="reset-filters-btn" id="resetFilters" hidden>Reset filters</button>
+        </div>
       </section>
 
       <section class="panel table-panel">
@@ -132,11 +136,12 @@
                 <th data-sort="assigned_to" class="sortable">Assigned to</th>
                 <th>Notes</th>
                 <th class="col-verify">Verify</th>
+                <th class="col-chevron" aria-label="Open"></th>
               </tr>
             </thead>
             <tbody id="leadsBody">
               <tr>
-                <td colspan="10" class="empty">Loading…</td>
+                <td colspan="11" class="empty">Loading…</td>
               </tr>
             </tbody>
           </table>
