@@ -6,8 +6,9 @@ const MU_DIRECTOR_MSG =
   "Director and PSC data is not yet available for Mauritius companies. This will be added when MNS API access is confirmed.";
 
 let team = [];
+let assignmentPools = {};
 let allLeads = [];
-let activeTab = "direct_clients";
+const QUEUE_TAB = "direct_clients";
 let sortKey = "score";
 let sortDir = "desc";
 let lastPayload = null;
@@ -19,7 +20,9 @@ let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
 const TABLE_COLSPAN = 11;
+const HELP_DISMISSED_KEY = "arie_help_dismissed";
 let appHasDates = false;
+let datesApiOk = true;
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -48,18 +51,48 @@ function showToast(msg, isError = false) {
 
 function setLoading(on, text) {
   $("#loadingOverlay").hidden = !on;
-  $("#refreshBtn").disabled = on;
+  const refreshBtn = $("#refreshBtn");
+  if (refreshBtn) refreshBtn.disabled = on;
   if (text) $("#loadingText").textContent = text;
 }
 
 function formatRefreshed(iso) {
-  if (!iso) return "Not refreshed this session";
+  if (!iso) return "Register data not refreshed this session";
   try {
     const d = new Date(iso);
-    return `Last refreshed: ${d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+    return `Last refreshed ${d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
   } catch {
-    return `Last refreshed: ${iso}`;
+    return `Last refreshed ${iso}`;
   }
+}
+
+function initHelpPanel() {
+  const panel = $("#helpPanel");
+  const dismissBtn = $("#dismissHelpBtn");
+  if (!panel) return;
+  if (localStorage.getItem(HELP_DISMISSED_KEY) === "1") {
+    panel.open = false;
+    panel.classList.add("help-panel--dismissed");
+  }
+  dismissBtn?.addEventListener("click", () => {
+    localStorage.setItem(HELP_DISMISSED_KEY, "1");
+    panel.open = false;
+    panel.classList.add("help-panel--dismissed");
+  });
+}
+
+function reviewHighPriorityLeads() {
+  $("#filterPriority").value = "High";
+  $("#filterSearch").value = "";
+  $("#filterAssigned").value = "";
+  $("#filterJurisdiction").value = "";
+  applySortFromControl();
+  renderTable();
+  renderQueueFromFiltered();
+  updateResetFiltersVisibility();
+  const n = getFilteredLeads().length;
+  showToast(n ? `Showing ${n} high-priority lead${n === 1 ? "" : "s"}` : "No high-priority leads in this queue");
+  document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function formatDisplayDate(iso) {
@@ -91,6 +124,7 @@ async function loadMeta() {
   const res = await fetch("/api/meta");
   const data = await res.json();
   team = data.team || [];
+  assignmentPools = data.assignment_pools || {};
   hasOpenaiKey = !!data.has_openai_key;
   const assignedFilter = $("#filterAssigned");
   team.forEach((name) => {
@@ -105,32 +139,32 @@ async function loadAvailableDates() {
   const demo = $("#demoMode").checked;
   try {
     const res = await fetch(`/api/available-dates?demo=${demo}`);
+    datesApiOk = res.ok;
     if (!res.ok) {
       availableDates = [];
       dateDetails = [];
-      currentDate = "";
       appHasDates = false;
-      renderDateSelect();
+      syncSnapshotControls();
       updateDateNavButtons();
-      return "";
+      return currentDate || "";
     }
     const data = await res.json();
     availableDates = data.dates || [];
     dateDetails = data.date_details || [];
     const recommended = data.recommended || availableDates[0] || "";
-    currentDate = recommended;
+    if (recommended) currentDate = recommended;
     appHasDates = availableDates.length > 0;
-    renderDateSelect();
+    syncSnapshotControls();
     updateDateNavButtons();
-    return appHasDates ? recommended : "";
+    return appHasDates ? recommended : currentDate || "";
   } catch {
+    datesApiOk = false;
     availableDates = [];
     dateDetails = [];
-    currentDate = "";
     appHasDates = false;
-    renderDateSelect();
+    syncSnapshotControls();
     updateDateNavButtons();
-    return "";
+    return currentDate || "";
   }
 }
 
@@ -139,41 +173,102 @@ function dateDetail(date) {
 }
 
 function dateOptionLabel(d) {
-  const info = dateDetail(d);
-  const uk = info.uk_count ?? 0;
-  const mu = info.mauritius_count ?? 0;
-  const muLabel = mu > 0 ? String(mu) : "none";
-  return `${formatDisplayDate(d)} — UK: ${uk} · MU: ${muLabel}`;
+  return formatDisplayDate(d);
 }
 
-function renderDateSelect() {
+function poolMembersForTab() {
+  const members = assignmentPools.direct_clients;
+  if (Array.isArray(members) && members.length) return members;
+  return ["Ismael", "Tasneem"];
+}
+
+function syncSnapshotControls() {
   const sel = $("#dateSelect");
   const emptyEl = $("#dateSelectEmpty");
-  const list = availableDates.length ? availableDates : dateDetails.map((d) => d.date);
+  const nav = $("#dateNav");
+  if (!sel || !emptyEl) return;
 
-  if (!list.length) {
+  const list = availableDates.length ? availableDates : dateDetails.map((d) => d.date).filter(Boolean);
+  const workingDate = getCurrentDate() || lastPayload?.incorporation_date || "";
+  const hasList = list.length > 0;
+  const canWork = hasList || workingDate;
+
+  if (!canWork) {
     sel.hidden = true;
     sel.innerHTML = "";
     emptyEl.hidden = false;
-    currentDate = "";
+    emptyEl.textContent = datesApiOk
+      ? "No snapshots available — run the daily pipeline"
+      : "Snapshot list unavailable — check that the app server is up to date";
+    if (nav) nav.classList.add("queue-hero__date-nav--disabled");
     return;
   }
 
-  sel.hidden = false;
+  if (nav) nav.classList.remove("queue-hero__date-nav--disabled");
   emptyEl.hidden = true;
-  sel.innerHTML = "";
-  list.forEach((d) => {
-    const opt = document.createElement("option");
-    opt.value = d;
-    opt.textContent = dateOptionLabel(d);
-    sel.appendChild(opt);
-  });
-  if (currentDate && list.includes(currentDate)) {
-    sel.value = currentDate;
-  } else if (list.length) {
-    sel.value = list[0];
-    currentDate = list[0];
+  sel.hidden = false;
+
+  if (hasList) {
+    sel.innerHTML = "";
+    list.forEach((d) => {
+      const opt = document.createElement("option");
+      opt.value = d;
+      opt.textContent = dateOptionLabel(d);
+      sel.appendChild(opt);
+    });
+    if (workingDate && list.includes(workingDate)) {
+      sel.value = workingDate;
+      currentDate = workingDate;
+    } else if (list.length) {
+      sel.value = list[0];
+      currentDate = list[0];
+    }
+  } else if (workingDate) {
+    sel.innerHTML = `<option value="${escapeHtml(workingDate)}">${escapeHtml(formatDisplayDate(workingDate))}</option>`;
+    sel.value = workingDate;
+    currentDate = workingDate;
   }
+}
+
+function renderQueueHero(payload) {
+  const dateEl = $("#queueHeroDate");
+  const refreshedEl = $("#queueHeroRefreshed");
+  const statsEl = $("#queueHeroStats");
+  if (!dateEl) return;
+
+  const d = payload?.incorporation_date || getCurrentDate();
+  const m = payload?.metrics || {};
+  const uk = m.uk_count ?? 0;
+  const mu = m.mauritius_count ?? 0;
+
+  if (!d) {
+    dateEl.textContent = "No date selected";
+    if (refreshedEl) refreshedEl.textContent = "";
+    if (statsEl) statsEl.innerHTML = "";
+    return;
+  }
+
+  dateEl.textContent = formatDisplayDate(d);
+  if (refreshedEl) {
+    refreshedEl.textContent = payload?.last_refreshed
+      ? formatRefreshed(payload.last_refreshed)
+      : "Incorporation date — when companies were registered";
+  }
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <span class="hero-stat"><strong>${m.total_leads ?? 0}</strong> in queue</span>
+      <span class="hero-stat hero-stat--accent"><strong>${m.high_priority ?? 0}</strong> high priority</span>
+      <span class="hero-stat hero-stat--muted">UK ${uk} · Mauritius ${mu}</span>
+    `;
+  }
+  syncSnapshotControls();
+}
+
+function updateTabGuidance() {
+  const el = $("#tabGuidance");
+  if (!el) return;
+  const members = poolMembersForTab().join(", ");
+  el.textContent = `Companies to onboard as clients. Assign to ${members}. Introducer partners are tracked manually, not in this auto queue.`;
 }
 
 function updateDateNavButtons() {
@@ -234,46 +329,49 @@ function countUkMu(rows) {
   return { uk, mu };
 }
 
-function renderMetricsZeroState() {
-  $("#metrics").innerHTML = `
-    <div class="metric-card"><strong>—</strong><span>Total leads</span></div>
-    <div class="metric-card accent"><strong>—</strong><span>High priority</span></div>
-    <div class="metric-card"><strong>—</strong><span>Assigned</span></div>
-    <div class="metric-card"><strong>—</strong><span>Unassigned</span></div>
-    <p class="metric-jurisdiction">UK: — · Mauritius: —</p>
-  `;
-  $("#lastRefreshed").textContent = "";
-  const tabLabel = activeTab === "introducers" ? "Introducers" : "Direct Clients";
-  $("#panelTitle").textContent = tabLabel;
+function renderQueueZeroState() {
+  renderQueueHero(null);
   $("#panelSubtitle").textContent = "No data loaded";
+  updateTabGuidance();
+}
+
+function renderMetricsZeroState() {
+  renderQueueZeroState();
+}
+
+function renderQueue(payload) {
+  renderQueueHero(payload);
+  $("#panelSubtitle").textContent = `${payload.count ?? 0} leads in this queue`;
+  const notice = $("#mauritiusMissingNotice");
+  if (notice) notice.hidden = true;
+  updateTabGuidance();
 }
 
 function renderMetrics(payload) {
-  const m = payload.metrics || {};
-  const meta = payload.meta || {};
-  $("#metrics").innerHTML = `
-    <div class="metric-card"><strong>${m.total_leads ?? 0}</strong><span>Total leads</span></div>
-    <div class="metric-card accent"><strong>${m.high_priority ?? 0}</strong><span>High priority</span></div>
-    <div class="metric-card"><strong>${m.assigned_count ?? 0}</strong><span>Assigned</span></div>
-    <div class="metric-card"><strong>${m.unassigned_count ?? 0}</strong><span>Unassigned</span></div>
-    <p class="metric-jurisdiction">UK: ${m.uk_count ?? 0} · Mauritius: ${m.mauritius_count ?? 0}</p>
-  `;
-  $("#lastRefreshed").textContent = formatRefreshed(payload.last_refreshed);
-  const tabLabel = activeTab === "introducers" ? "Introducers" : "Direct Clients";
-  $("#panelTitle").textContent = tabLabel;
-  $("#panelSubtitle").textContent = `${payload.count ?? 0} leads · ${payload.incorporation_date}`;
-  $("#ukIntroducerNotice").hidden = activeTab !== "introducers";
-
-  const sourceSub = $("#dataSourceSubtitle");
-  if (activeTab === "direct_clients") {
-    sourceSub.hidden = false;
-    sourceSub.textContent = "UK: top 25 by score · Mauritius: all";
-  } else {
-    sourceSub.hidden = true;
-  }
-
-  $("#mauritiusMissingNotice").hidden = true;
+  renderQueue(payload);
 }
+
+function renderQueueFromFiltered() {
+  if (!lastPayload) return;
+  const filtered = getFilteredLeads();
+  const { uk, mu } = countUkMu(filtered);
+  renderQueueHero({
+    ...lastPayload,
+    metrics: {
+      total_leads: filtered.length,
+      high_priority: filtered.filter((l) => (Number(l.score) || 0) >= 70).length,
+      assigned_count: filtered.filter((l) => (l.assigned_to || "").trim()).length,
+      unassigned_count: filtered.filter((l) => !(l.assigned_to || "").trim()).length,
+      uk_count: uk,
+      mauritius_count: mu,
+    },
+  });
+}
+
+function renderMetricsFromFiltered() {
+  renderQueueFromFiltered();
+}
+
 
 let copyCmdTimer = null;
 
@@ -315,29 +413,16 @@ function showTableEmptyState() {
     <div class="table-empty-state">
       <span class="table-empty-state__mark" aria-hidden="true">A</span>
       <p class="brand-eyebrow table-empty-state__eyebrow">Arie Finance</p>
-      <h3 class="table-empty-state__title">No lead data available</h3>
-      <p class="table-empty-state__text">The pipeline has not run yet for this environment, or no data exists for the selected date.</p>
+      <h3 class="table-empty-state__title">No leads for this date</h3>
+      <p class="table-empty-state__text">Choose another snapshot date, refresh register data from Settings, or run the daily pipeline for this environment.</p>
       <div class="table-empty-state__actions">
-        <button type="button" class="btn btn-primary" id="emptyRefreshUk">Refresh UK Leads</button>
-        <button type="button" class="btn btn-secondary" id="emptyCopyMu">Run Mauritius Pipeline</button>
-        <a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Open Health Check →</a>
+        <button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>
+        <a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>
       </div>
     </div>
   </td></tr>`;
 
-  $("#emptyRefreshUk")?.addEventListener("click", () => fetchLeads(true));
-  $("#emptyCopyMu")?.addEventListener("click", async () => {
-    const cmd = pipelineCommandToday();
-    try {
-      await navigator.clipboard.writeText(cmd);
-      $("#emptyCopyMu").textContent = "Copied ✓";
-      setTimeout(() => {
-        $("#emptyCopyMu").textContent = "Run Mauritius Pipeline";
-      }, 2000);
-    } catch {
-      showToast("Could not copy command", true);
-    }
-  });
+  $("#emptyRefreshData")?.addEventListener("click", () => fetchLeads(true));
 }
 
 function renderDataStatusBanner(status) {
@@ -385,7 +470,8 @@ function renderDataStatusBanner(status) {
 }
 
 async function fetchDataStatus() {
-  if (!appHasDates && !getCurrentDate()) {
+  const hasQueue = allLeads.length > 0 || !!lastPayload?.incorporation_date;
+  if (!appHasDates && !getCurrentDate() && !hasQueue) {
     renderNoEnvironmentDataBanner();
     return;
   }
@@ -396,17 +482,17 @@ async function fetchDataStatus() {
       `/api/data-status?date=${encodeURIComponent(date)}&demo=${demo}`
     );
     if (!res.ok) {
-      if (!appHasDates) renderNoEnvironmentDataBanner();
+      if (!appHasDates && !hasQueue) renderNoEnvironmentDataBanner();
       return;
     }
     const data = await res.json();
-    if (!appHasDates && (!data.banner || data.banner.type === "none")) {
+    if (!appHasDates && (!data.banner || data.banner.type === "none") && !hasQueue) {
       renderNoEnvironmentDataBanner();
       return;
     }
     renderDataStatusBanner(data);
   } catch {
-    if (!appHasDates) renderNoEnvironmentDataBanner();
+    if (!appHasDates && !hasQueue) renderNoEnvironmentDataBanner();
   }
 }
 
@@ -516,13 +602,83 @@ function updateSortHeaders() {
 }
 
 function assignedOptions(lead, selected) {
-  const val = selected ?? lead.assigned_to ?? "";
-  return team
+  const val = selected ?? lead?.assigned_to ?? "";
+  const members = [...poolMembersForTab()];
+  if (val && !members.includes(val)) members.push(val);
+  return members
     .map(
       (t) =>
         `<option value="${escapeHtml(t)}" ${val === t ? "selected" : ""}>${escapeHtml(t)}</option>`
     )
     .join("");
+}
+
+function renderScoreBreakdownHtml(lead) {
+  const bd = lead.score_breakdown;
+  if (!bd || !Array.isArray(bd.components)) {
+    return `<section class="intel-section score-explainer">
+      <h3>Why this score?</h3>
+      <p class="muted">Score breakdown is not available for this lead.</p>
+    </section>`;
+  }
+
+  const bars = bd.components
+    .map((c) => {
+      const pct = c.max ? Math.min(100, Math.round((c.points / c.max) * 100)) : 0;
+      return `
+        <li class="score-component">
+          <div class="score-component__head">
+            <span class="score-component__label">${escapeHtml(c.label)}</span>
+            <span class="score-component__pts">${c.points} / ${c.max}</span>
+          </div>
+          <div class="score-bar" aria-hidden="true"><span class="score-bar__fill" style="width:${pct}%"></span></div>
+          <p class="score-component__detail">${escapeHtml(c.detail || "")}</p>
+        </li>`;
+    })
+    .join("");
+
+  return `
+    <section class="intel-section score-explainer">
+      <h3>Why this score? <span class="score-explainer__total">${escapeHtml(String(bd.total))}</span></h3>
+      <p class="score-explainer__summary">${escapeHtml(bd.summary || "")}</p>
+      <p class="score-explainer__priority">Priority: <strong>${escapeHtml(bd.priority || lead.priority || "—")}</strong> (High ≥ 70 · Medium ≥ 40)</p>
+      <ul class="score-components">${bars}</ul>
+    </section>`;
+}
+
+function renderClassificationHtml(lead) {
+  const leadType = (lead.lead_type || "direct").toLowerCase();
+  const typeNote =
+    leadType === "introducer"
+      ? "Name suggests a professional / fiduciary firm — still in the main queue; tag introducer relationships manually if relevant."
+      : "Onboarding candidate from registry data.";
+
+  const tags = (lead.why_tags || []).map((t) => `<span class="why-tag">${escapeHtml(t)}</span>`).join("");
+  const strengths = (lead.strengths || [])
+    .slice(0, 4)
+    .map((s) => `<li>${escapeHtml(s)}</li>`)
+    .join("");
+  const cautions = (lead.cautions || [])
+    .slice(0, 3)
+    .map((c) => `<li>${escapeHtml(c)}</li>`)
+    .join("");
+
+  return `
+    <section class="intel-section classification-explainer">
+      <h3>Classification</h3>
+      <p class="classification-explainer__reason">${escapeHtml(lead.lead_type_reason || typeNote)}</p>
+      ${tags ? `<div class="why-tags">${tags}</div>` : ""}
+      ${
+        strengths
+          ? `<div class="signal-block signal-block--strength"><h4>Strengths</h4><ul>${strengths}</ul></div>`
+          : ""
+      }
+      ${
+        cautions
+          ? `<div class="signal-block signal-block--caution"><h4>Review points</h4><ul>${cautions}</ul></div>`
+          : ""
+      }
+    </section>`;
 }
 
 function verifyCell(lead) {
@@ -646,23 +802,6 @@ function syncTableFromLead(lead) {
   if (notesCellEl) notesCellEl.innerHTML = notesCell(lead);
 }
 
-function renderMetricsFromFiltered() {
-  if (!lastPayload) return;
-  const filtered = getFilteredLeads();
-  const { uk, mu } = countUkMu(filtered);
-  renderMetrics({
-    ...lastPayload,
-    metrics: {
-      total_leads: filtered.length,
-      high_priority: filtered.filter((l) => (Number(l.score) || 0) >= 70).length,
-      assigned_count: filtered.filter((l) => (l.assigned_to || "").trim()).length,
-      unassigned_count: filtered.filter((l) => !(l.assigned_to || "").trim()).length,
-      uk_count: uk,
-      mauritius_count: mu,
-    },
-  });
-}
-
 async function fetchLeads(refresh = false) {
   const date = getCurrentDate();
   const demo = $("#demoMode").checked;
@@ -672,8 +811,8 @@ async function fetchLeads(refresh = false) {
     fetchDataStatus();
     return;
   }
-  setLoading(true, refresh ? "Fetching UK from Companies House…" : "Loading leads…");
-  const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(activeTab)}`;
+  setLoading(true, refresh ? "Refreshing register data…" : "Loading queue…");
+  const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
   try {
     let res = await fetch(url, { method: refresh ? "POST" : "GET" });
@@ -688,8 +827,18 @@ async function fetchLeads(refresh = false) {
     const data = await res.json();
     lastPayload = data;
     allLeads = data.leads || [];
-    currentDate = data.incorporation_date;
-    $("#dateSelect").value = currentDate;
+    if (data.incorporation_date) {
+      currentDate = data.incorporation_date;
+      if (!availableDates.includes(data.incorporation_date)) {
+        availableDates = [...new Set([data.incorporation_date, ...availableDates])].sort().reverse();
+      }
+      appHasDates = availableDates.length > 0;
+      syncSnapshotControls();
+      updateDateNavButtons();
+    }
+    if ($("#dateSelect") && !$("#dateSelect").hidden) {
+      $("#dateSelect").value = currentDate;
+    }
     renderMetrics(data);
     renderTable();
     if (openLeadId) {
@@ -707,13 +856,6 @@ async function fetchLeads(refresh = false) {
     setLoading(false);
     fetchDataStatus();
   }
-}
-
-function switchTab(tab) {
-  activeTab = tab;
-  $$(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tab));
-  fetchDataStatus();
-  fetchLeads(false);
 }
 
 function exportCsv() {
@@ -739,7 +881,7 @@ function exportCsv() {
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `arie-${activeTab}-${getCurrentDate() || "export"}.csv`;
+  a.download = `arie-direct-clients-${getCurrentDate() || "export"}.csv`;
   a.click();
   showToast(`Exported ${rows.length} leads`);
 }
@@ -812,6 +954,9 @@ function renderDetailShell(lead) {
           : ""
       }
     </section>
+
+    ${renderScoreBreakdownHtml(lead)}
+    ${renderClassificationHtml(lead)}
 
     <section class="intel-section" id="detailOfficersSection">
       <h3>Directors &amp; Officers</h3>
@@ -1032,6 +1177,16 @@ function showBriefContent(brief) {
 }
 
 function init() {
+  initHelpPanel();
+  $("#reviewHighPriorityBtn")?.addEventListener("click", reviewHighPriorityLeads);
+  $("#moreFiltersBtn")?.addEventListener("click", () => {
+    const panel = $("#moreFilters");
+    const btn = $("#moreFiltersBtn");
+    if (!panel || !btn) return;
+    const open = panel.hidden;
+    panel.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+  });
   $("#refreshBtn").addEventListener("click", () => fetchLeads(true));
   $("#demoMode").addEventListener("change", async () => {
     await loadAvailableDates();
@@ -1058,10 +1213,6 @@ function init() {
   $("#detailBackdrop").addEventListener("click", closeDetailPanel);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && openLeadId) closeDetailPanel();
-  });
-
-  $$(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   });
 
   const rerender = () => {
@@ -1113,6 +1264,7 @@ function init() {
   loadMeta()
     .then(() => loadAvailableDates())
     .then((date) => {
+      updateTabGuidance();
       fetchDataStatus();
       if (!date) {
         renderMetricsZeroState();

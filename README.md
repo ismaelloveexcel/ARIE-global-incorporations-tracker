@@ -1,24 +1,35 @@
 # Arie Incorporation Monitor
 
-Internal onboarding intelligence dashboard for **Arie Finance** — verified UK incorporations from the official Companies House API, scored and ready for outreach assignment.
+Internal **onboarding intelligence** dashboard for [Arie Finance](https://www.ariefinance.com/) — a regulated Mauritius-based provider serving international businesses, management companies, trusts, and complex multi-entity structures.
 
-## Monday stakeholder demo
+The app turns **official registry feeds** (UK Companies House + Mauritius GBC/AC where available) into a daily **work queue**: scored leads, team assignment, verify links, and operator notes. It is built for relationship managers and ops, not as a public product.
 
-### 1. Setup
+## Product model (important)
+
+| List | How it is maintained |
+|------|----------------------|
+| **Direct clients** | **Automatic** — pipeline + dashboard (`/`) show newly incorporated companies to onboard as Arie clients. |
+| **Introducers** | **Manual** — referral partners (management firms, professional services, etc.) are **not** auto-split into a second tab. Track them outside this queue or in your CRM until a manual introducers feature exists. |
+
+Name-based hints in the detail panel (e.g. “fiduciary / professional services”) are for **scoring context only** — they do not create a duplicate list.
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and set `COMPANIES_HOUSE_API_KEY` ([register free](https://developer.company-information.service.gov.uk/)).
+Copy `.env.example` to `.env` and set `COMPANIES_HOUSE_API_KEY` ([register free](https://developer.company-information.service.gov.uk/)). Optional: `OPENAI_API_KEY` for AI briefs in the lead panel.
 
-### 2. Pre-load data (optional)
+### Run the daily pipeline (optional)
 
 ```bash
-python run_uk_daily.py --date 2026-05-14 --demo
+python main.py --date YYYY-MM-DD --skip-difc
+# or UK-only helper:
+python run_uk_daily.py --date YYYY-MM-DD --demo
 ```
 
-### 3. Start the app
+### Start the dashboard
 
 ```bash
 python -m app.main
@@ -26,44 +37,65 @@ python -m app.main
 
 Open **http://127.0.0.1:8080**
 
-### Demo talking points
+- **Operator UI:** `/` — single work queue, filters, assignments, Companies House / MNS verify links.
+- **Operations UI:** `/dev` — pipeline health, alerts, assignment pool config (not linked from operator header except Settings → Operations).
 
-- Every company is from the **official Companies House API** — click **Verify** to open the government register.
-- **Metrics** at the top: totals, high priority, fintech/payments, assigned count, last refresh time.
-- **Scoring** prioritises financial SIC codes and fintech-style names.
-- **Lead type** (direct vs introducer) uses transparent name-based rules — hover the subtitle under each company.
-- **Assign** leads to Aisha, Stephen, Rajesh, Tasneem, or Ismael — saved on server + browser backup.
-- **Mauritius** and other jurisdictions show as roadmap items until official API access is in place.
+## What operators see
 
-### App features
+1. **Hero strip** — incorporation snapshot date, queue stats, UK/Mauritius breakdown, last refresh.
+2. **Filters + table** — search, priority, jurisdiction, sort, assign, notes.
+3. **Review high priority** — one-click filter to high-priority leads.
+4. **Row detail** — score breakdown, classification hints, directors (UK), optional AI brief.
+5. **Settings** (header) — refresh register data, cap UK volume (top 25 by score in demo mode).
 
-| Feature | Description |
-|---------|-------------|
-| Dashboard metrics | Total, high priority, fintech/payments, assigned, last refreshed |
-| Full lead table | Score, priority, SIC, lead type, website guess, contact placeholders |
-| Verify links | Companies House profile for every row |
-| Filters | Search, min score, priority, lead type, assigned to |
-| Sortable columns | Click column headers |
-| Refresh | Live API pull with loading indicator |
+## Scoring
 
-### What we deliberately did not include (yet)
+- Heuristic **0–100** fit score (not calibrated to conversion).
+- Components: entity type, jurisdiction, SIC (UK), name keywords — see `uk_leads/score_explain.py` and the detail panel.
+- Priority: High ≥ 70, Medium ≥ 40, Low otherwise.
 
-- Supabase, deduplication, Playwright scrapers
-- Fake emails or AI-invented companies
-- Mauritius / DIFC automation until trustworthy access exists
+## Architecture (high level)
 
-## CSV export (backup)
-
-```bash
-python run_uk_daily.py --date 2026-05-14 --demo
+```
+main.py / run_uk_daily.py  →  exports/YYYY-MM-DD.csv (+ MU sources)
+         ↓
+uk_leads/data_loader.py    →  merge UK + Mauritius for a date
+         ↓
+uk_leads/enrichment.py     →  score, lead_type hints, score_breakdown
+uk_leads/dashboard.py      →  direct-client queue rules (single tab)
+uk_leads/assignments.py    →  round-robin + data/assignments.json
+         ↓
+app/main.py (FastAPI)      →  /api/leads, static operator UI
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -q
 ```
 
-## Legacy pipeline
+## Repository layout
 
-`main.py` (multi-jurisdiction + Supabase) remains in the repo but is **not** part of the demo path.
+| Path | Purpose |
+|------|---------|
+| `app/` | FastAPI app + static operator UI |
+| `uk_leads/` | Scoring, enrichment, classification, assignments |
+| `scoring/` | Score engine |
+| `tests/` | Unit tests |
+| `exports/` | Pipeline CSV output (gitignored) |
+| `data/assignments.json` | Saved assignments (gitignored) |
+
+## Deliberately out of scope (for now)
+
+- Auth / multi-tenant access control
+- Auto introducers tab or CRM sync
+- Fake companies or invented contact data
+- Mauritius directors/PSC until MNS API access is confirmed
+
+## Independent review
+
+See [`docs/INDEPENDENT_REVIEW_PROMPT.md`](docs/INDEPENDENT_REVIEW_PROMPT.md) for a copy-paste prompt to run a full-repo review focused on growth and operational efficiency for Arie Finance.
+
+## Legacy
+
+`main.py` (multi-jurisdiction + optional Supabase) remains for batch pipeline runs; the **demo path** is `app.main` + `exports/` CSVs.

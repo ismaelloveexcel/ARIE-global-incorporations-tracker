@@ -2,7 +2,7 @@
 Arie Incorporation Monitor — Phase 1 web app.
 
 Run: python -m app.main
-User view: /  (Direct Clients + Introducers tabs)
+User view: /  (daily incorporation queue)
 Ops view:    /dev  (not linked from user UI)
 """
 from __future__ import annotations
@@ -187,7 +187,7 @@ def api_meta():
         "brand": "Arie Finance",
         "positioning": (
             "Daily onboarding intelligence — UK Companies House and Mauritius GBC/AC. "
-            "Direct Clients and Introducers dashboards for team assignment."
+            "One work queue for client onboarding; introducer relationships tracked manually."
         ),
         "has_api_key": bool(os.environ.get("COMPANIES_HOUSE_API_KEY")),
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),

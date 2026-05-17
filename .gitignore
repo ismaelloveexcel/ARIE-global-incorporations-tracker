@@ -16,6 +16,10 @@ pip-delete-this-directory.txt
 .mypy_cache/
 *.pyo
 
+# Local QA / CI downloads (not source)
+ci-artifact/
+checklist-*.png
+
 # Pipeline outputs
 exports/
 exports/debug/

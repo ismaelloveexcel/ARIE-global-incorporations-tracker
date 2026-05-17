@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Instrument+Serif:ital@0;1&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
@@ -25,129 +25,161 @@
           <div>
             <p class="brand-eyebrow">Arie Finance</p>
             <h1>Incorporation Monitor</h1>
-            <p class="tagline">Phase 1 · Direct Clients &amp; Introducers</p>
           </div>
         </div>
-        <div class="header-actions">
-          <div class="date-nav" id="dateNav" aria-label="Browse dates">
-            <button type="button" class="date-nav-btn" id="datePrev" aria-label="Previous date">← Prev</button>
-            <select id="dateSelect" class="date-select" aria-label="Select date"></select>
-            <span id="dateSelectEmpty" class="date-select-empty" hidden>No data available</span>
-            <button type="button" class="date-nav-btn" id="dateNext" aria-label="Next date">Next →</button>
+        <details class="header-utilities">
+          <summary class="header-utilities__toggle">Settings</summary>
+          <div class="header-utilities__panel">
+            <label class="toggle toggle--compact">
+              <input type="checkbox" id="demoMode" checked />
+              <span>Cap UK volume (top 25 by score)</span>
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" id="refreshBtn">Refresh register data</button>
+            <a class="btn btn-ghost btn-sm" href="/dev" target="_blank" rel="noopener">Operations</a>
           </div>
-          <label class="toggle">
-            <input type="checkbox" id="demoMode" checked />
-            <span>Limit UK list</span>
-          </label>
-          <button type="button" class="btn btn-primary" id="refreshBtn">Refresh UK</button>
-        </div>
+        </details>
       </div>
     </header>
 
-    <nav class="dashboard-tabs" aria-label="Dashboards">
-      <button type="button" class="tab-btn active" data-tab="direct_clients">Direct Clients</button>
-      <button type="button" class="tab-btn" data-tab="introducers">Introducers</button>
-    </nav>
-
-    <div id="dataStatusBanner" class="data-status-banner" hidden aria-live="polite"></div>
-
-    <main class="main">
-      <div class="notice-banner" id="ukIntroducerNotice" hidden>
-        🇬🇧 UK introducer monitoring — to be implemented
-      </div>
-
-      <section class="metrics" id="metrics" aria-label="Summary metrics"></section>
-      <p class="data-source-subtitle" id="dataSourceSubtitle" hidden>UK: top 25 by score · Mauritius: all</p>
-      <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
-        <p id="mauritiusMissingText"></p>
-        <p class="notice-mu-hint" id="mauritiusMissingHint" hidden>
-          <code id="muPipelineCmd"></code>
-          <button type="button" class="btn btn-ghost btn-sm" id="copyMuCmd">Copy</button>
-        </p>
-      </div>
-      <p class="last-refreshed" id="lastRefreshed"></p>
-
-      <section class="filters panel">
-        <div class="filters-row">
-        <div class="filters-grid">
-          <label>
-            <span>Search</span>
-            <input type="search" id="filterSearch" placeholder="Company name…" />
-          </label>
-          <label>
-            <span>Sort by</span>
-            <select id="filterSort">
-              <option value="score-desc" selected>Score (highest first)</option>
-              <option value="score-asc">Score (lowest first)</option>
-              <option value="company_name-asc">Company name (A–Z)</option>
-              <option value="company_name-desc">Company name (Z–A)</option>
-              <option value="incorporation_date-desc">Incorporated (newest first)</option>
-              <option value="incorporation_date-asc">Incorporated (oldest first)</option>
-            </select>
-          </label>
-          <label>
-            <span>Priority</span>
-            <select id="filterPriority">
-              <option value="">All</option>
-              <option value="High">High</option>
-              <option value="Medium">Medium</option>
-              <option value="Low">Low</option>
-            </select>
-          </label>
-          <label>
-            <span>Assigned to</span>
-            <select id="filterAssigned">
-              <option value="">All</option>
-              <option value="__unassigned__">Unassigned</option>
-            </select>
-          </label>
-          <label>
-            <span>Jurisdiction</span>
-            <select id="filterJurisdiction">
-              <option value="">All</option>
-              <option value="UK">UK</option>
-              <option value="Mauritius">Mauritius</option>
-            </select>
-          </label>
+    <div class="shell">
+      <section class="queue-hero" aria-label="Today's queue">
+        <div class="queue-hero__primary">
+          <p class="queue-hero__eyebrow">Incorporation date</p>
+          <h2 class="queue-hero__date" id="queueHeroDate">—</h2>
+          <p class="queue-hero__refreshed" id="queueHeroRefreshed">Data freshness will appear here</p>
+          <div class="queue-hero__stats" id="queueHeroStats" aria-live="polite"></div>
         </div>
-        <button type="button" class="reset-filters-btn" id="resetFilters" hidden>Reset filters</button>
-        </div>
-      </section>
-
-      <section class="panel table-panel">
-        <div class="panel-head panel-head-row">
-          <div>
-            <h2 id="panelTitle">Direct Clients</h2>
-            <p id="panelSubtitle">Loading…</p>
+        <div class="queue-hero__aside">
+          <button type="button" class="btn btn-primary" id="reviewHighPriorityBtn">
+            Review high priority
+          </button>
+          <div class="queue-hero__date-nav" id="dateNav" aria-label="Change snapshot date">
+            <button type="button" class="date-nav-btn" id="datePrev" aria-label="Previous snapshot">
+              Previous
+            </button>
+            <label class="queue-hero__select-wrap">
+              <span class="visually-hidden">Snapshot date</span>
+              <select id="dateSelect" class="date-select" aria-label="Snapshot date"></select>
+            </label>
+            <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
+            <button type="button" class="date-nav-btn" id="dateNext" aria-label="Next snapshot">
+              Next
+            </button>
           </div>
-          <button type="button" class="btn btn-ghost" id="exportBtn">Export view (CSV)</button>
-        </div>
-        <div class="table-wrap">
-          <table id="leadsTable">
-            <thead>
-              <tr>
-                <th data-sort="company_name" class="sortable">Company</th>
-                <th data-sort="jurisdiction" class="sortable">Jurisdiction</th>
-                <th data-sort="entity_type" class="sortable">Entity type</th>
-                <th data-sort="score" class="sortable">Score</th>
-                <th data-sort="priority" class="sortable">Priority</th>
-                <th>SIC</th>
-                <th data-sort="incorporation_date" class="sortable">Incorporated</th>
-                <th data-sort="assigned_to" class="sortable">Assigned to</th>
-                <th>Notes</th>
-                <th class="col-verify">Verify</th>
-                <th class="col-chevron" aria-label="Open"></th>
-              </tr>
-            </thead>
-            <tbody id="leadsBody">
-              <tr>
-                <td colspan="11" class="empty">Loading…</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
       </section>
-    </main>
+
+      <p class="queue-guidance" id="tabGuidance" aria-live="polite"></p>
+
+      <div id="dataStatusBanner" class="data-status-banner" hidden aria-live="polite"></div>
+
+      <main class="main">
+        <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
+          <p id="mauritiusMissingText"></p>
+          <p class="notice-mu-hint" id="mauritiusMissingHint" hidden>
+            <code id="muPipelineCmd"></code>
+            <button type="button" class="btn btn-ghost btn-sm" id="copyMuCmd">Copy</button>
+          </p>
+        </div>
+
+        <section class="filters-toolbar" aria-label="Filters">
+          <div class="filters-toolbar__primary">
+            <label class="filter-field filter-field--grow">
+              <span class="visually-hidden">Search</span>
+              <input type="search" id="filterSearch" placeholder="Search company…" />
+            </label>
+            <label class="filter-field">
+              <span class="visually-hidden">Sort</span>
+              <select id="filterSort" aria-label="Sort by">
+                <option value="score-desc" selected>Score ↓</option>
+                <option value="score-asc">Score ↑</option>
+                <option value="company_name-asc">Name A–Z</option>
+                <option value="company_name-desc">Name Z–A</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span class="visually-hidden">Priority</span>
+              <select id="filterPriority" aria-label="Priority">
+                <option value="">All priorities</option>
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+              </select>
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" id="moreFiltersBtn" aria-expanded="false" aria-controls="moreFilters">
+              More filters
+            </button>
+            <button type="button" class="reset-filters-btn" id="resetFilters" hidden>Reset</button>
+          </div>
+          <div class="filters-toolbar__more" id="moreFilters" hidden>
+            <label class="filter-field">
+              <span>Assigned</span>
+              <select id="filterAssigned">
+                <option value="">Anyone</option>
+                <option value="__unassigned__">Unassigned</option>
+              </select>
+            </label>
+            <label class="filter-field">
+              <span>Jurisdiction</span>
+              <select id="filterJurisdiction">
+                <option value="">All</option>
+                <option value="UK">UK</option>
+                <option value="Mauritius">Mauritius</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="panel-head panel-head-row">
+            <div>
+              <h2 id="panelTitle" class="panel-title-sr">Direct clients</h2>
+              <p id="panelSubtitle" class="panel-subtitle-muted">Loading…</p>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="exportBtn">Export CSV</button>
+          </div>
+          <div class="table-wrap">
+            <table id="leadsTable">
+              <thead>
+                <tr>
+                  <th data-sort="company_name" class="sortable">Company</th>
+                  <th data-sort="jurisdiction" class="sortable">Jurisdiction</th>
+                  <th data-sort="entity_type" class="sortable">Entity type</th>
+                  <th data-sort="score" class="sortable" title="Open row for score breakdown">Score</th>
+                  <th data-sort="priority" class="sortable">Priority</th>
+                  <th>SIC</th>
+                  <th data-sort="incorporation_date" class="sortable">Incorporated</th>
+                  <th data-sort="assigned_to" class="sortable">Assigned</th>
+                  <th>Notes</th>
+                  <th class="col-verify">Verify</th>
+                  <th class="col-chevron" aria-label="Open"></th>
+                </tr>
+              </thead>
+              <tbody id="leadsBody">
+                <tr>
+                  <td colspan="11" class="empty">Loading…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <details class="help-panel" id="helpPanel">
+          <summary>How this works</summary>
+          <div class="help-panel__body">
+            <p>
+              Official registry feeds (UK Companies House and Mauritius GBC/AC) are merged into one daily work queue.
+              Each company receives a <strong>rules-based fit score (0–100)</strong> — not a credit rating.
+            </p>
+            <p class="help-panel__note">
+              <strong>Introducer relationships</strong> (referral partners) are tracked manually — not as a separate auto list here.
+              Open a row for score detail, assignment, and notes.
+            </p>
+            <button type="button" class="btn btn-ghost btn-sm" id="dismissHelpBtn">Don’t show again</button>
+          </div>
+        </details>
+      </main>
+    </div>
 
     <div class="detail-backdrop" id="detailBackdrop" hidden></div>
     <aside class="detail-panel" id="detailPanel" hidden aria-label="Lead intelligence">

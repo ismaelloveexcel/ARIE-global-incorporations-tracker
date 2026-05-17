@@ -308,11 +308,15 @@ def enrich_row(row: dict[str, Any], raw_data: dict[str, Any] | None = None) -> d
     row["why_tags"] = tags
     row["why_summary"] = build_why_summary(tags, row.get("company_name", ""), lead_type)
 
+    from uk_leads.dashboard import dashboard_tabs_for_lead
+    from uk_leads.score_explain import build_score_breakdown
     from uk_leads.signals import compute_signals
 
     sig = compute_signals(row)
     row["strengths"] = sig["strengths"]
     row["cautions"] = sig["cautions"]
+    row["score_breakdown"] = build_score_breakdown(row)
+    row["dashboard_tabs"] = dashboard_tabs_for_lead(row)
 
     # Future fields — explicit placeholders
     for field in OUTREACH_EXTENSION_FIELDS:

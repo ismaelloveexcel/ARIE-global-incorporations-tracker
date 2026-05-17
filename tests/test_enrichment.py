@@ -69,3 +69,19 @@ def test_enrich_row_has_why_summary():
     assert row["why_summary"]
     assert isinstance(row["why_tags"], list)
     assert len(row["why_tags"]) >= 1
+
+
+def test_enrich_row_has_score_breakdown():
+    row = enrich_row(
+        {
+            "company_name": "Alpha Capital GBC Ltd",
+            "jurisdiction": "Mauritius",
+            "entity_type": "GLOBAL BUSINESS COMPANY",
+            "source": "mauritius_mns",
+            "score": 68,
+        }
+    )
+    bd = row["score_breakdown"]
+    assert bd["total"] == 68.0
+    assert len(bd["components"]) == 4
+    assert row["dashboard_tabs"] == ["direct_clients"]

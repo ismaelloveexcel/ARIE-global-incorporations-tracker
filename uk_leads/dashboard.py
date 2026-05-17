@@ -111,18 +111,20 @@ def filter_tab_leads(rows: list[dict], tab: str) -> list[dict]:
     if tab == "direct_clients":
         return [r for r in rows if is_direct_client(r)]
     if tab == "introducers":
-        return [r for r in rows if is_introducer(r)]
+        # Introducer relationships are maintained manually — not auto-split from pipeline.
+        return []
     return rows
+
+
+def dashboard_tabs_for_lead(row: dict) -> list[str]:
+    """Which dashboard tabs include this lead (operator UI uses direct_clients only)."""
+    if is_direct_client(row):
+        return ["direct_clients"]
+    return []
 
 
 def assignment_pool_for_lead(row: dict, pools: dict[str, list[str]]) -> list[str] | None:
     """Which round-robin pool applies when lead has no saved assignment."""
-    direct = is_direct_client(row)
-    intro = is_introducer(row)
-    if direct and intro:
+    if is_direct_client(row):
         return pools.get("direct_clients")
-    if direct:
-        return pools.get("direct_clients")
-    if intro:
-        return pools.get("introducers")
     return None

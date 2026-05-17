@@ -76,8 +76,8 @@ def test_round_robin_direct_pool():
     assert b == "Tasneem"
 
 
-def test_round_robin_dual_membership_uses_direct_pool():
-    """MU GBC/AC in both tabs — Direct Clients pool wins per spec."""
+def test_round_robin_mu_management_name_uses_direct_pool():
+    """MU GBC/AC with introducer-like name — same Direct Clients pool (no auto introducer tab)."""
     store = {"counters": {"direct_counter": 0, "introducer_counter": 0}}
     pools = {"direct_clients": ["Ismael", "Tasneem"], "introducers": ["Aisha", "Stephen", "Rajesh"]}
     row = {
