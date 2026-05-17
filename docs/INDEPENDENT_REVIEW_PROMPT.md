@@ -138,6 +138,10 @@ Read `docs/CLASSIFICATION.md` before critiquing introducers:
 - Compare this approach to buying a generic sales intelligence tool.  
 - One-page “RM morning playbook” using only features that exist today.
 
+## UI sign-off (front end)
+
+Before approving the operator dashboard HTML, use **`docs/UI_DONE_CHECKLIST.md`**. Annotated markup for reviewers: **`docs/review/index-revised.html`** (production: `app/static/index.html`).
+
 ---
 
 *End of prompt.*

@@ -79,7 +79,7 @@ def build_score_breakdown(row: dict[str, Any]) -> dict[str, Any]:
         "priority": priority_from_score(total),
         "components": components,
         "summary": (
-            "Rules-based fit score for Arie onboarding — not a credit rating. "
-            "Higher scores mean stronger alignment with financial / cross-border profiles."
+            "Fit for Arie client onboarding (payments, international structures, GBC/AC). "
+            "Not a credit rating — use with registry verification."
         ),
     }

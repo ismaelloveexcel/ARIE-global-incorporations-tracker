@@ -11,7 +11,7 @@ from uk_leads.enrichment import enrich_row, format_sic_codes
 
 CH_PROFILE_BASE = "https://find-and-update.company-information.service.gov.uk/company/"
 
-DEMO_MIN_SCORE = 35.0
+DEMO_MIN_SCORE = 40.0
 DEMO_TOP = 25
 
 TEAM_MEMBERS = ["Aisha", "Stephen", "Rajesh", "Tasneem", "Ismael"]

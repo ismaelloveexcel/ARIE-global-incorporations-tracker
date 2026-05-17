@@ -10,6 +10,9 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from normalization.schema import CompanyRecord
+from scoring.engine import score as compute_fit_score
+
 # Columns reserved for future enrichment (left blank unless sourced)
 OUTREACH_EXTENSION_FIELDS = [
     "company_description",
@@ -182,11 +185,29 @@ def _sic_financial(sic_codes: str) -> bool:
     return False
 
 
+def row_to_record(row: dict[str, Any]) -> CompanyRecord:
+    raw: dict[str, Any] = {}
+    jurisdiction = (row.get("jurisdiction") or "UK").strip()
+    sic = row.get("sic_codes") or ""
+    if jurisdiction == "UK" and sic and sic != "—":
+        raw["sic_codes"] = [s.strip() for s in str(sic).split(",") if s.strip()]
+
+    return CompanyRecord(
+        company_name=row.get("company_name") or "",
+        jurisdiction=jurisdiction,
+        source=row.get("source") or "",
+        entity_type=row.get("entity_type"),
+        incorporation_date=row.get("incorporation_date"),
+        raw_data=raw,
+    )
+
+
 def build_why_tags(
     company_name: str,
     sic_codes: str,
     lead_type: str,
     incorporation_age_days: int | None,
+    jurisdiction: str = "",
 ) -> list[str]:
     """Short explainable tags — no speculation beyond name/SIC/age."""
     tags: list[str] = []
@@ -216,10 +237,13 @@ def build_why_tags(
             break
 
     if lead_type == "introducer":
-        tags.append("Potential introducer profile")
+        tags.append("Management / corporate services profile")
+
+    if (jurisdiction or "").strip() == "Mauritius":
+        tags.append("Mauritius GBC/AC")
 
     if not tags:
-        tags.append("New UK incorporation")
+        tags.append("New incorporation")
 
     # De-duplicate preserving order
     seen: set[str] = set()
@@ -234,10 +258,40 @@ def build_why_tags(
 def build_why_summary(tags: list[str], company_name: str, lead_type: str) -> str:
     """One-line business relevance for stakeholders."""
     if not tags:
-        return f"Newly incorporated UK company ({company_name})."
-    focus = "introducer / professional services" if lead_type == "introducer" else "direct onboarding"
+        return f"New incorporation ({company_name}) — review registry profile."
     joined = "; ".join(tags[:4]).lower()
-    return f"Flagged for {focus}: {joined}."
+    return f"Client prospect: {joined}."
+
+
+def build_prospect_reason(row: dict[str, Any]) -> str:
+    """Actionable one-liner for operators — why pursue as an Arie client."""
+    parts: list[str] = []
+    jurisdiction = (row.get("jurisdiction") or "").strip()
+    entity = (row.get("entity_type") or "").strip()
+    if jurisdiction:
+        parts.append(f"{jurisdiction}" + (f" {entity}" if entity else ""))
+
+    score = float(row.get("score") or 0)
+    for tag in row.get("why_tags") or []:
+        if tag in ("New incorporation",):
+            continue
+        parts.append(tag.lower())
+        if len(parts) >= 3:
+            break
+
+    age = (row.get("incorporation_age_label") or "").strip()
+    if age and len(parts) < 4:
+        parts.append(age.lower())
+
+    if score >= 70:
+        parts.append("priority outreach")
+    elif score >= 40:
+        parts.append("worth a call")
+
+    if not parts:
+        return "New incorporation — check registry and business activity."
+    sentence = " · ".join(parts[:5])
+    return sentence[0].upper() + sentence[1:] + "."
 
 
 def ensure_verify_url(row: dict[str, Any]) -> str:
@@ -256,11 +310,8 @@ def enrich_row(row: dict[str, Any], raw_data: dict[str, Any] | None = None) -> d
     if not raw and row.get("sic_codes"):
         raw = {"sic_codes": [s.strip() for s in str(row["sic_codes"]).split(",") if s.strip()]}
 
-    score = row.get("score")
-    try:
-        score_f = float(score) if score is not None and score != "" else 0.0
-    except (TypeError, ValueError):
-        score_f = 0.0
+    record = row_to_record(row)
+    score_f = float(compute_fit_score(record))
     row["score"] = score_f
 
     sic = row.get("sic_codes") or format_sic_codes(raw)
@@ -304,9 +355,11 @@ def enrich_row(row: dict[str, Any], raw_data: dict[str, Any] | None = None) -> d
         sic,
         lead_type,
         age_days if isinstance(age_days, int) else None,
+        jurisdiction=row.get("jurisdiction") or "",
     )
     row["why_tags"] = tags
     row["why_summary"] = build_why_summary(tags, row.get("company_name", ""), lead_type)
+    row["prospect_reason"] = build_prospect_reason(row)
 
     from uk_leads.dashboard import dashboard_tabs_for_lead
     from uk_leads.score_explain import build_score_breakdown

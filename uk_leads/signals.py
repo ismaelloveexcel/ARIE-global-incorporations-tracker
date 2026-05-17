@@ -52,7 +52,7 @@ def compute_signals(
             break
 
     if lead_type == "introducer":
-        strengths.append("Professional / introducer-style naming")
+        strengths.append("Management / corporate services — core Arie client segment")
 
     if float(row.get("score") or 0) >= 70:
         strengths.append("High internal fit score for Arie onboarding focus")
@@ -70,8 +70,8 @@ def compute_signals(
             f"{officer_count} officers listed — unusually large board for a new company; confirm structure"
         )
 
-    if not strengths:
-        strengths.append("Standard new UK incorporation — review for fit")
+    if not strengths and float(row.get("score") or 0) < 40:
+        cautions.append("Lower fit score — confirm business activity before outreach")
 
     if director_signals:
         strengths.extend(director_signals.get("strengths") or [])

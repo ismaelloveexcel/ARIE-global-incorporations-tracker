@@ -1,16 +1,22 @@
 <!DOCTYPE html>
+<!--
+  REVIEW COPY — Arie Incorporation Monitor (revised markup)
+  Production: app/static/index.html
+  Checklist: docs/UI_DONE_CHECKLIST.md
+  Local preview uses relative paths to app/static for CSS and JS.
+-->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arie Finance · Incorporation Monitor</title>
+    <title>[Review] Arie Finance · Incorporation Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Instrument+Serif:ital@0;1&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="../../app/static/styles.css" />
   </head>
   <body>
     <div class="loading-overlay" id="loadingOverlay" hidden role="status" aria-live="assertive" aria-busy="false">
@@ -191,6 +197,6 @@
     </aside>
 
     <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
-    <script src="/static/app.js"></script>
+    <script src="../../app/static/app.js"></script>
   </body>
 </html>

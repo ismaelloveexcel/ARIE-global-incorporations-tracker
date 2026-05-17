@@ -87,8 +87,15 @@ Run from the **repository root** (same command as CI). Do not report “tests br
 | `exports/` | Pipeline CSV output (gitignored) |
 | `data/assignments.json` | Saved assignments (gitignored) |
 
+## Product focus
+
+**Strong prospect output** — newly incorporated companies that match Arie’s client profile, ranked and explainable so RMs can turn them into clients. The dashboard is a **discovery and prioritisation** tool, not a CRM or workflow system.
+
+Use **Strong prospects (40+)** (default filter), **Review high priority**, the **Why contact** column, score breakdown, verify links, assign, and notes. Scores are recomputed on load using Arie ICP rules (international, payments, GBC/AC, etc.). Track outreach in your existing CRM or spreadsheet.
+
 ## Deliberately out of scope (for now)
 
+- RM workflow layers (follow-up dates, won/lost pipelines) — see deferred notes in [`docs/WORKFLOW_MVP.md`](docs/WORKFLOW_MVP.md)
 - Auth / multi-tenant access control
 - Auto introducers tab or CRM sync
 - Fake companies or invented contact data

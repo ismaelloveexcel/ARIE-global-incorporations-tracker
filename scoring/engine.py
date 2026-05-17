@@ -92,9 +92,38 @@ KEYWORD_WEIGHTS: dict[str, float] = {
     r"\bwallet\b": 12,
     r"\bpaytech\b": 18,
     r"\bregtech\b": 15,
+    # Arie ICP — international / complex structures (see ariefinance.com positioning)
+    r"\binternational\b": 12,
+    r"\bglobal\b": 10,
+    r"\bwealth\b": 12,
+    r"\bfamily office\b": 14,
+    r"\bmanagement\b": 8,
+    r"\bcorporate services\b": 10,
+    r"\btreasury\b": 10,
+    r"\btrading\b": 8,
+    r"\bcommerce\b": 6,
+    r"\bmulti[\s-]?entity\b": 12,
 }
 
 KEYWORD_MAX: float = 20.0
+
+# Mauritius has no SIC in feed — boost name signals slightly so GBC/AC prospects rank fairly vs UK.
+MU_NAME_SIGNAL_MAX: float = 12.0
+MU_NAME_SIGNAL_PATTERNS: dict[str, float] = {
+    r"\bholdings?\b": 8,
+    r"\bcapital\b": 6,
+    r"\binvestment\b": 6,
+    r"\bfund\b": 8,
+    r"\binternational\b": 8,
+    r"\bglobal\b": 6,
+    r"\bwealth\b": 8,
+    r"\bmanagement\b": 6,
+    r"\bservices\b": 4,
+    r"\badvisory\b": 6,
+    r"\btrust\b": 6,
+    r"\bfintech\b": 10,
+    r"\bpayments?\b": 10,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +176,17 @@ def _keyword_score(record: CompanyRecord) -> float:
     return min(total, KEYWORD_MAX)
 
 
+def _mauritius_name_signal_score(record: CompanyRecord) -> float:
+    if record.jurisdiction != "Mauritius":
+        return 0.0
+    text = record.company_name.lower()
+    total = 0.0
+    for pattern, weight in MU_NAME_SIGNAL_PATTERNS.items():
+        if re.search(pattern, text, re.IGNORECASE):
+            total += weight
+    return min(total, MU_NAME_SIGNAL_MAX)
+
+
 def score(record: CompanyRecord) -> float:
     """
     Compute and return the deterministic score for *record* (0–100).
@@ -164,5 +204,6 @@ def score(record: CompanyRecord) -> float:
         + _jurisdiction_score(record)
         + _sic_score(record)
         + _keyword_score(record)
+        + _mauritius_name_signal_score(record)
     )
     return round(min(raw, 100.0), 2)
