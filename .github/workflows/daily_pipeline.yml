@@ -59,6 +59,14 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
+      - name: Restore previous snapshot exports
+        uses: actions/cache@v4
+        with:
+          path: exports
+          key: incorporation-exports-${{ github.ref_name }}
+          restore-keys: |
+            incorporation-exports-
+
       - name: Build CLI arguments
         id: build_args
         shell: bash
@@ -97,3 +105,10 @@ jobs:
           name: incorporation-snapshot-${{ github.run_id }}
           path: exports/
           retention-days: 90
+
+      - name: Save snapshot exports for next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: exports
+          key: incorporation-exports-${{ github.ref_name }}

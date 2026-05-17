@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import re
+from datetime import date, timedelta
 from pathlib import Path
 
+from uk_leads import refresh_meta
 from uk_leads.core import csv_path_for_date, load_csv
 from uk_leads.dashboard import MU_VERIFY_URL, is_mauritius_includable, lead_id
 from uk_leads.enrichment import enrich_row
@@ -181,37 +184,18 @@ _UK_FULL_RE = re.compile(r"^uk-leads-(\d{4}-\d{2}-\d{2})\.csv$")
 _PIPELINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.csv$")
 
 
-def _date_counts_for_scan(date: str, demo: bool) -> dict:
-    uk_path = csv_path_for_date(date, demo=demo)
-    uk_count = len(load_csv(uk_path)) if uk_path.exists() else 0
-    if uk_count == 0 and demo:
-        full_path = csv_path_for_date(date, demo=False)
-        if full_path.exists():
-            uk_count = len(load_csv(full_path))
-    mu_stats = mauritius_export_stats(date)
-    return {
-        "date": date,
-        "uk_count": uk_count,
-        "mauritius_count": mu_stats.get("gbc_ac", 0),
-        "has_uk": uk_count > 0,
-        "has_mauritius": mu_stats.get("gbc_ac", 0) > 0,
-        "mauritius_export_exists": mu_stats.get("exists", False),
-    }
+def default_nav_lookback_days() -> int:
+    raw = os.environ.get("SNAPSHOT_NAV_DAYS", "30").strip()
+    try:
+        return max(1, min(366, int(raw)))
+    except ValueError:
+        return 30
 
 
-def scan_available_dates(demo: bool = True) -> dict:
-    """
-    Scan exports/ for dates with UK and/or Mauritius data.
-    Returns dates (newest first), per-date counts, and recommended default.
-    """
+def _discover_export_dates() -> set[str]:
     exports = Path("exports")
     if not exports.is_dir():
-        return {
-            "dates": [],
-            "date_details": [],
-            "recommended": None,
-            "reason": "No exports folder found",
-        }
+        return set()
 
     discovered: set[str] = set()
     for path in exports.iterdir():
@@ -223,19 +207,74 @@ def scan_available_dates(demo: bool = True) -> dict:
             if m:
                 discovered.add(m.group(1))
                 break
+    return discovered
 
-    if not discovered:
+
+def _calendar_nav_dates(lookback_days: int) -> list[str]:
+    """Incorporation dates for the nav window (newest first), ending at yesterday."""
+    end = date.today() - timedelta(days=1)
+    return [(end - timedelta(days=i)).isoformat() for i in range(lookback_days)]
+
+
+def _has_snapshot_files(date: str, demo: bool) -> bool:
+    if pipeline_export_path(date).exists():
+        return True
+    if csv_path_for_date(date, demo=demo).exists():
+        return True
+    if demo and csv_path_for_date(date, demo=False).exists():
+        return True
+    return False
+
+
+def _date_counts_for_scan(date: str, demo: bool) -> dict:
+    uk_path = csv_path_for_date(date, demo=demo)
+    uk_count = len(load_csv(uk_path)) if uk_path.exists() else 0
+    if uk_count == 0 and demo:
+        full_path = csv_path_for_date(date, demo=False)
+        if full_path.exists():
+            uk_count = len(load_csv(full_path))
+    mu_stats = mauritius_export_stats(date)
+    has_snapshot = _has_snapshot_files(date, demo=demo)
+    has_uk = uk_count > 0
+    has_mauritius = mu_stats.get("gbc_ac", 0) > 0
+    return {
+        "date": date,
+        "uk_count": uk_count,
+        "mauritius_count": mu_stats.get("gbc_ac", 0),
+        "has_uk": has_uk,
+        "has_mauritius": has_mauritius,
+        "has_data": has_uk or has_mauritius,
+        "has_snapshot": has_snapshot,
+        "mauritius_export_exists": mu_stats.get("exists", False),
+    }
+
+
+def scan_available_dates(demo: bool = True, lookback_days: int | None = None) -> dict:
+    """
+    Dates the user can navigate to: rolling calendar window + any export/refresh files.
+    Returns navigable dates (newest first), per-date counts, and recommended default.
+    """
+    lookback = lookback_days if lookback_days is not None else default_nav_lookback_days()
+    discovered = _discover_export_dates()
+    refreshed = set(refresh_meta.list_refreshed_dates(demo=demo))
+    navigable = sorted(
+        set(_calendar_nav_dates(lookback)) | discovered | refreshed,
+        reverse=True,
+    )
+
+    if not navigable:
         return {
             "dates": [],
+            "snapshot_dates": [],
             "date_details": [],
             "recommended": None,
-            "reason": "No export files found in exports/",
+            "lookback_days": lookback,
+            "reason": "No dates in navigation window",
         }
 
-    date_details = [_date_counts_for_scan(d, demo=demo) for d in sorted(discovered, reverse=True)]
-    dates_with_data = [d["date"] for d in date_details if d["has_uk"] or d["has_mauritius"]]
-    if not dates_with_data:
-        dates_with_data = [d["date"] for d in date_details]
+    date_details = [_date_counts_for_scan(d, demo=demo) for d in navigable]
+    snapshot_dates = [d["date"] for d in date_details if d["has_snapshot"]]
+    dates_with_data = [d["date"] for d in date_details if d["has_data"]]
 
     both = [d for d in date_details if d["has_uk"] and d["has_mauritius"]]
     if both:
@@ -243,14 +282,19 @@ def scan_available_dates(demo: bool = True) -> dict:
         reason = "Most recent date with UK + Mauritius data"
     elif dates_with_data:
         recommended = dates_with_data[0]
-        reason = "Most recent date with export data (UK and/or Mauritius)"
+        reason = "Most recent date with saved lead data"
+    elif snapshot_dates:
+        recommended = snapshot_dates[0]
+        reason = "Most recent saved pipeline snapshot"
     else:
-        recommended = date_details[0]["date"]
-        reason = "Most recent export file date"
+        recommended = navigable[0]
+        reason = "Most recent day in the navigation window"
 
     return {
-        "dates": dates_with_data,
+        "dates": navigable,
+        "snapshot_dates": snapshot_dates,
         "date_details": date_details,
         "recommended": recommended,
+        "lookback_days": lookback,
         "reason": reason,
     }

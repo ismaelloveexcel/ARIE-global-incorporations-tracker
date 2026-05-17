@@ -28,10 +28,14 @@
           </div>
         </div>
         <div class="header-actions">
-          <label class="header-date">
-            <span class="visually-hidden">Snapshot date</span>
-            <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
-          </label>
+          <div class="header-date-nav" id="dateNav" aria-label="Change snapshot date">
+            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous day" title="Previous day">‹</button>
+            <label class="header-date">
+              <span class="visually-hidden">Snapshot date</span>
+              <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
+            </label>
+            <button type="button" class="btn-icon" id="dateNext" aria-label="Next day" title="Next day">›</button>
+          </div>
           <button type="button" class="btn-icon" id="refreshBtn" aria-label="Refresh register data" title="Refresh register data">↻</button>
           <details class="header-utilities header-utilities--icon">
             <summary class="btn-icon" aria-label="Settings" title="Settings">⚙</summary>
@@ -58,10 +62,6 @@
         <div class="decision-hero__action">
           <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review pursue-now leads</button>
           <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
-          <div class="decision-hero__date-nav visually-hidden" id="dateNav" aria-hidden="true">
-            <button type="button" id="datePrev" tabindex="-1">Previous</button>
-            <button type="button" id="dateNext" tabindex="-1">Next</button>
-          </div>
         </div>
       </section>
 
@@ -93,7 +93,7 @@
           <div class="panel-head panel-head-row">
             <div>
               <h2 id="panelTitle" class="visually-hidden">Lead queue</h2>
-              <p id="panelSubtitle" class="panel-subtitle-muted">Loading…</p>
+              <p id="panelSubtitle" class="panel-subtitle-muted" hidden></p>
             </div>
             <button type="button" class="btn btn-ghost btn-sm" id="exportBtn" title="Export filtered leads to CSV">Export</button>
           </div>

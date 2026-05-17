@@ -34,6 +34,11 @@ from uk_leads.core import (
 )
 from uk_leads.dashboard import filter_tab_leads, lead_id
 from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path, scan_available_dates
+from uk_leads.mauritius_snapshot import (
+    mauritius_auto_refresh_enabled,
+    refresh_mauritius_for_date,
+    should_auto_fetch_mauritius,
+)
 from uk_leads.dev_config import load_config, save_config
 from uk_leads.enrichment import enrich_rows
 from uk_leads.health import run_health_checks
@@ -169,7 +174,16 @@ def _package_response(
 
 @app.get("/api/available-dates")
 def api_available_dates(demo: bool = True):
-    return scan_available_dates(demo=demo)
+    payload = scan_available_dates(demo=demo)
+    payload["can_fetch_uk"] = bool(os.environ.get("COMPANIES_HOUSE_API_KEY"))
+    payload["can_fetch_mauritius"] = mauritius_auto_refresh_enabled()
+    return payload
+
+
+def _maybe_auto_refresh_mauritius(incorporation_date: str) -> dict | None:
+    if not should_auto_fetch_mauritius(incorporation_date):
+        return None
+    return refresh_mauritius_for_date(incorporation_date)
 
 
 @app.get("/api/data-status")
@@ -251,10 +265,52 @@ def api_refresh(
     export_csv(uk_rows, path)
     refreshed = refresh_meta.record_refresh(d, demo, total, len(uk_rows))
 
+    mauritius_result = _maybe_auto_refresh_mauritius(d)
+
     rows, meta = _load_merged_rows(d, demo=demo)
+    if mauritius_result:
+        meta["mauritius_refresh"] = mauritius_result
     return _package_response(
         rows, tab, d, demo, meta, total_fetched=total, last_refreshed=refreshed
     )
+
+
+@app.post("/api/refresh/mauritius")
+def api_refresh_mauritius(
+    incorporation_date: str | None = None,
+    demo: bool = True,
+    tab: str | None = Query(None),
+):
+    d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
+    try:
+        date.fromisoformat(d)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date; use YYYY-MM-DD") from exc
+
+    if not mauritius_auto_refresh_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Mauritius auto-fetch is disabled (MAURITIUS_AUTO_REFRESH=false).",
+        )
+
+    try:
+        result = refresh_mauritius_for_date(d)
+    except Exception as exc:
+        logger.exception("Mauritius refresh failed for %s", d)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if result.get("outcome") == "ERROR":
+        raise HTTPException(
+            status_code=503,
+            detail=result.get("error_message") or "Mauritius register fetch failed",
+        )
+
+    rows, meta = _load_merged_rows(d, demo=demo)
+    meta["mauritius_refresh"] = result
+    last = refresh_meta.get_last_mauritius_refresh(d) or datetime_from_mtime(
+        pipeline_export_path(d)
+    )
+    return _package_response(rows, tab, d, demo, meta, last_refreshed=last)
 
 
 @app.patch("/api/leads/{lead_id_key}")
@@ -433,25 +489,11 @@ def api_dev_refresh_uk(incorporation_date: str | None = None, demo: bool = True)
 @app.post("/api/dev/refresh/mauritius")
 def api_dev_refresh_mauritius(incorporation_date: str | None = None):
     d = incorporation_date or date.today().isoformat()
-    cmd = [sys.executable, "main.py", "--date", d, "--skip-difc"]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=str(Path.cwd()),
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Mauritius pipeline timed out after 5 minutes") from None
-
-    return {
-        "date": d,
-        "returncode": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
-        "success": proc.returncode == 0,
-    }
+        result = refresh_mauritius_for_date(d)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"date": d, "success": result.get("outcome") == "OK", **result}
 
 
 @app.get("/api/dev/pipeline-alerts")

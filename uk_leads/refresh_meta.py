@@ -46,3 +46,51 @@ def get_last_refresh(incorporation_date: str, demo: bool) -> str | None:
     if entry:
         return entry.get("refreshed_at")
     return None
+
+
+def record_mauritius_refresh(
+    incorporation_date: str,
+    exported: int,
+    outcome: str,
+    error_message: str | None = None,
+) -> str:
+    ts = datetime.now(timezone.utc).isoformat()
+    data = _load()
+    key = f"mauritius:{incorporation_date}"
+    data[key] = {
+        "incorporation_date": incorporation_date,
+        "refreshed_at": ts,
+        "exported": exported,
+        "outcome": outcome,
+        "error_message": error_message,
+    }
+    _save(data)
+    return ts
+
+
+def mauritius_refresh_attempted(incorporation_date: str) -> bool:
+    data = _load()
+    return f"mauritius:{incorporation_date}" in data
+
+
+def get_last_mauritius_refresh(incorporation_date: str) -> str | None:
+    data = _load()
+    entry = data.get(f"mauritius:{incorporation_date}")
+    if entry:
+        return entry.get("refreshed_at")
+    return None
+
+
+def list_refreshed_dates(demo: bool) -> list[str]:
+    """Incorporation dates that were loaded via the in-app UK refresh."""
+    data = _load()
+    out: list[str] = []
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+        if bool(entry.get("demo")) != demo:
+            continue
+        d = (entry.get("incorporation_date") or "").strip()
+        if d:
+            out.append(d)
+    return sorted(set(out), reverse=True)

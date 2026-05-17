@@ -2875,6 +2875,23 @@ body.panel-open {
   gap: 0.5rem;
 }
 
+.decision-ui .header-date-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.decision-ui .header-date-nav--disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.decision-ui .header-date-nav .btn-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+  padding-bottom: 0.1rem;
+}
+
 .decision-ui .header-date .date-select--header {
   font-size: 0.82rem;
   padding: 0.4rem 0.55rem;

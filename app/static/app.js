@@ -13,6 +13,10 @@ let sortKey = "score";
 let sortDir = "desc";
 let lastPayload = null;
 let hasOpenaiKey = false;
+let hasCompaniesHouseKey = false;
+let canFetchUk = false;
+let canFetchMauritius = false;
+let snapshotDates = [];
 let availableDates = [];
 let dateDetails = [];
 let currentDate = "";
@@ -214,13 +218,16 @@ async function loadMeta() {
   team = data.team || [];
   assignmentPools = data.assignment_pools || {};
   hasOpenaiKey = !!data.has_openai_key;
+  hasCompaniesHouseKey = !!data.has_api_key;
   const assignedFilter = $("#filterAssigned");
-  team.forEach((name) => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    assignedFilter.appendChild(opt);
-  });
+  if (assignedFilter) {
+    team.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      assignedFilter.appendChild(opt);
+    });
+  }
 }
 
 async function loadAvailableDates() {
@@ -238,7 +245,10 @@ async function loadAvailableDates() {
     }
     const data = await res.json();
     availableDates = data.dates || [];
+    snapshotDates = data.snapshot_dates || [];
     dateDetails = data.date_details || [];
+    canFetchUk = !!data.can_fetch_uk;
+    canFetchMauritius = !!data.can_fetch_mauritius;
     const recommended = data.recommended || availableDates[0] || "";
     if (recommended) currentDate = recommended;
     appHasDates = availableDates.length > 0;
@@ -257,11 +267,23 @@ async function loadAvailableDates() {
 }
 
 function dateDetail(date) {
-  return dateDetails.find((d) => d.date === date) || { date, uk_count: 0, mauritius_count: 0 };
+  return (
+    dateDetails.find((d) => d.date === date) || {
+      date,
+      uk_count: 0,
+      mauritius_count: 0,
+      has_data: false,
+      has_snapshot: false,
+    }
+  );
 }
 
 function dateOptionLabel(d) {
-  return formatDisplayDate(d);
+  const label = formatDisplayDate(d);
+  const detail = dateDetail(d);
+  if (detail.has_data) return label;
+  if (detail.has_snapshot) return `${label} · empty`;
+  return `${label} · not loaded`;
 }
 
 function poolMembersForTab() {
@@ -286,13 +308,13 @@ function syncSnapshotControls() {
     sel.innerHTML = "";
     emptyEl.hidden = false;
     emptyEl.textContent = datesApiOk
-      ? "No snapshots available — run the daily pipeline"
+      ? "Date list unavailable — refresh the page"
       : "Snapshot list unavailable — check that the app server is up to date";
-    if (nav) nav.classList.add("queue-hero__date-nav--disabled");
+    if (nav) nav.classList.add("header-date-nav--disabled");
     return;
   }
 
-  if (nav) nav.classList.remove("queue-hero__date-nav--disabled");
+  if (nav) nav.classList.remove("header-date-nav--disabled");
   emptyEl.hidden = true;
   sel.hidden = false;
 
@@ -318,6 +340,21 @@ function syncSnapshotControls() {
   }
 }
 
+function renderHeroTierStats(statsEl, tierRows) {
+  if (!statsEl) return;
+  const tiers = countTiersFromRows(tierRows);
+  statsEl.innerHTML = `
+    <p class="decision-metric decision-metric--pursue">
+      <span class="decision-metric__value">${tiers.pursue}</span>
+      <span class="decision-metric__label">pursue-now leads</span>
+    </p>
+    <p class="decision-metric decision-metric--strong">
+      <span class="decision-metric__value">${tiers.month}</span>
+      <span class="decision-metric__label">strong leads</span>
+    </p>
+  `;
+}
+
 function renderQueueHero(payload, rowsForTiers) {
   const dateEl = $("#queueHeroDate");
   const refreshedEl = $("#queueHeroRefreshed");
@@ -328,26 +365,18 @@ function renderQueueHero(payload, rowsForTiers) {
   const tierRows = rowsForTiers ?? (allLeads.length ? allLeads : []);
 
   if (!d) {
-    dateEl.textContent = "No date selected";
-    if (refreshedEl) refreshedEl.textContent = "";
-    if (statsEl) statsEl.innerHTML = "";
+    dateEl.textContent = appHasDates ? "Choose a snapshot date" : "No snapshot loaded yet";
+    if (refreshedEl) {
+      refreshedEl.textContent = appHasDates
+        ? "Pick a date in the header to load leads"
+        : "Run the daily pipeline or refresh register data in Settings";
+    }
+    renderHeroTierStats(statsEl, []);
     return;
   }
 
   dateEl.textContent = formatDisplayDate(d);
-  if (statsEl) {
-    const tiers = countTiersFromRows(tierRows);
-    statsEl.innerHTML = `
-      <p class="decision-metric decision-metric--pursue">
-        <span class="decision-metric__value">${tiers.pursue}</span>
-        <span class="decision-metric__label">pursue-now leads</span>
-      </p>
-      <p class="decision-metric decision-metric--strong">
-        <span class="decision-metric__value">${tiers.month}</span>
-        <span class="decision-metric__label">strong leads</span>
-      </p>
-    `;
-  }
+  renderHeroTierStats(statsEl, tierRows);
   if (refreshedEl) {
     refreshedEl.textContent = payload?.last_refreshed
       ? formatRefreshedShort(payload.last_refreshed)
@@ -429,9 +458,17 @@ function countUkMu(rows) {
   return { uk, mu };
 }
 
+function setPanelSubtitle(text) {
+  const el = $("#panelSubtitle");
+  if (!el) return;
+  const msg = text || "";
+  el.textContent = msg;
+  el.hidden = !msg;
+}
+
 function renderQueueZeroState() {
   renderQueueHero(null);
-  $("#panelSubtitle").textContent = "No data loaded";
+  setPanelSubtitle(appHasDates ? "" : "No snapshot data in this environment");
   updateTabGuidance();
 }
 
@@ -441,7 +478,7 @@ function renderMetricsZeroState() {
 
 function renderQueue(payload) {
   renderQueueHero(payload);
-  $("#panelSubtitle").textContent = "";
+  setPanelSubtitle("");
   const notice = $("#mauritiusMissingNotice");
   if (notice) notice.hidden = true;
   updateTabGuidance();
@@ -512,14 +549,25 @@ function renderNoEnvironmentDataBanner() {
 
 function showTableEmptyState() {
   const body = $("#leadsBody");
+  const date = getCurrentDate();
+  const detail = dateDetail(date);
+  const canLoad = canFetchUk && hasCompaniesHouseKey && date && !detail.has_data;
+  const title = canLoad ? "No leads loaded for this date" : "No leads for this date";
+  const text = canLoad
+    ? "Use ‹ › or the date menu to pick another day, or load UK register data for this date."
+    : "Choose another date, refresh register data, or run the daily pipeline for this environment.";
+  const primaryBtn = canLoad
+    ? `<button type="button" class="btn btn-primary" id="emptyRefreshData">Load UK data for this date</button>`
+    : `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>`;
+
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state">
       <span class="table-empty-state__mark" aria-hidden="true">A</span>
       <p class="brand-eyebrow table-empty-state__eyebrow">Arie Finance</p>
-      <h3 class="table-empty-state__title">No leads for this date</h3>
-      <p class="table-empty-state__text">Choose another snapshot date, refresh register data from Settings, or run the daily pipeline for this environment.</p>
+      <h3 class="table-empty-state__title">${title}</h3>
+      <p class="table-empty-state__text">${text}</p>
       <div class="table-empty-state__actions">
-        <button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>
+        ${primaryBtn}
         <a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>
       </div>
     </div>
@@ -983,7 +1031,36 @@ function syncTableFromLead(lead) {
   if (notesCellEl) notesCellEl.innerHTML = notesCell(lead);
 }
 
-async function fetchLeads(refresh = false) {
+async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
+  if (!allowAuto || !canFetchMauritius || !payload?.meta?.mauritius_export_missing) {
+    return payload;
+  }
+  const date = getCurrentDate();
+  if (!date) return payload;
+
+  setLoading(true, "Loading Mauritius register data…");
+  const demo = $("#demoMode").checked;
+  const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
+  try {
+    const res = await fetch(`/api/refresh/mauritius?${base}`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.detail || "Mauritius data could not be loaded for this date", true);
+      return payload;
+    }
+    const updated = await res.json();
+    await loadAvailableDates();
+    showToast(`Mauritius register loaded — ${updated.count} leads in view`);
+    return updated;
+  } catch {
+    showToast("Mauritius data could not be loaded for this date", true);
+    return payload;
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function fetchLeads(refresh = false, allowAutoFetch = true) {
   const date = getCurrentDate();
   const demo = $("#demoMode").checked;
   if (!date) {
@@ -992,7 +1069,7 @@ async function fetchLeads(refresh = false) {
     fetchDataStatus();
     return;
   }
-  setLoading(true, refresh ? "Refreshing register data…" : "Loading queue…");
+  setLoading(true, refresh ? "Loading UK register data…" : "Loading queue…");
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
   try {
@@ -1001,11 +1078,18 @@ async function fetchLeads(refresh = false) {
       await loadAvailableDates();
       res = await fetch(`/api/leads?${base}`);
     }
+    if (!res.ok && !refresh && allowAutoFetch && res.status === 404 && canFetchUk && hasCompaniesHouseKey) {
+      const detail = dateDetail(date);
+      if (!detail.has_data) {
+        return fetchLeads(true, false);
+      }
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || res.statusText);
     }
-    const data = await res.json();
+    let data = await res.json();
+    data = await fetchMauritiusIfNeeded(data, allowAutoFetch);
     lastPayload = data;
     allLeads = data.leads || [];
     if (data.incorporation_date) {
@@ -1452,6 +1536,12 @@ function init() {
         return;
       }
       return fetchLeads(false);
+    })
+    .catch((e) => {
+      console.error(e);
+      showToast("Could not start the app — refresh the page", true);
+      renderMetricsZeroState();
+      showTableEmptyState();
     });
 }
 
