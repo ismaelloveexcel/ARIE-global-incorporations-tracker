@@ -19,28 +19,26 @@ let currentDate = "";
 let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
-const TABLE_COLSPAN = 10;
+const TABLE_COLSPAN = 5;
 const SCORE_TIERS = { pursue: 70, strong: 40, monitor: 0 };
-const DEFAULT_MIN_SCORE = SCORE_TIERS.strong;
-const HELP_DISMISSED_KEY = "arie_help_dismissed";
+const DEFAULT_MIN_SCORE = SCORE_TIERS.pursue;
 
-const QUICK_FILTER_PRESETS = {
-  "score-40": { minScore: SCORE_TIERS.strong, assigned: "", quickMode: "strong" },
-  "score-70": { minScore: SCORE_TIERS.pursue, assigned: "", quickMode: "pursue" },
-  "score-0": { minScore: 0, assigned: "", quickMode: "all" },
-  unassigned: { assigned: "__unassigned__", quickMode: "unassigned" },
+const VIEW_MODES = {
+  pursue: { minScore: SCORE_TIERS.pursue, label: "High priority" },
+  strong: { minScore: SCORE_TIERS.strong, label: "Strong" },
+  all: { minScore: 0, label: "All" },
 };
 
 function createDefaultFilterState() {
   return {
     search: "",
-    minScore: SCORE_TIERS.strong,
+    viewMode: "pursue",
+    minScore: SCORE_TIERS.pursue,
     priority: "",
     assigned: "",
     jurisdiction: "",
     sortKey: "score",
     sortDir: "desc",
-    quickMode: "strong",
   };
 }
 
@@ -90,45 +88,29 @@ function syncSortGlobalsFromFilterState() {
 }
 
 function applyFilterStateToDom() {
-  $("#filterSearch").value = filterState.search;
-  $("#filterMinScore").value = String(filterState.minScore);
-  $("#filterPriority").value = filterState.priority;
-  $("#filterAssigned").value = filterState.assigned;
-  $("#filterJurisdiction").value = filterState.jurisdiction;
-  $("#filterSort").value = `${filterState.sortKey}-${filterState.sortDir}`;
+  const search = $("#filterSearch");
+  if (search) search.value = filterState.search;
+  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.pursue;
+  filterState.minScore = mode.minScore;
+  syncViewModeButtons();
   syncSortGlobalsFromFilterState();
   updateSortHeaders();
 }
 
 function readFilterStateFromDom() {
-  const [sortKeyVal, sortDirVal] = ($("#filterSort").value || "score-desc").split("-");
-  filterState = {
-    ...filterState,
-    search: ($("#filterSearch").value || "").trim(),
-    minScore: Number($("#filterMinScore").value) || 0,
-    priority: $("#filterPriority").value,
-    assigned: $("#filterAssigned").value,
-    jurisdiction: $("#filterJurisdiction").value,
-    sortKey: sortKeyVal,
-    sortDir: sortDirVal,
-  };
-  filterState.quickMode = inferQuickMode(filterState);
+  filterState.search = ($("#filterSearch")?.value || "").trim();
+  const active = document.querySelector(".view-mode__btn.active");
+  if (active?.dataset.view && VIEW_MODES[active.dataset.view]) {
+    filterState.viewMode = active.dataset.view;
+    filterState.minScore = VIEW_MODES[filterState.viewMode].minScore;
+  }
   syncSortGlobalsFromFilterState();
-}
-
-function inferQuickMode(state) {
-  if (state.assigned === "__unassigned__") return "unassigned";
-  if (state.minScore === SCORE_TIERS.pursue && !state.priority) return "pursue";
-  if (state.minScore === SCORE_TIERS.strong && !state.priority && !state.assigned) return "strong";
-  if (state.minScore === 0 && !state.priority && !state.assigned) return "all";
-  return "custom";
 }
 
 function commitFilterState() {
   applyFilterStateToDom();
-  syncQuickFilterChips();
-  updateResetFiltersVisibility();
   updateExportButtonLabel();
+  updateTabGuidance();
   renderTable();
   renderQueueFromFiltered();
 }
@@ -139,26 +121,48 @@ function setFilterState(partial) {
 }
 
 function applyScoreTierLabels() {
-  const chip40 = document.querySelector('[data-quick="score-40"]');
-  const chip70 = document.querySelector('[data-quick="score-70"]');
-  if (chip40) chip40.textContent = `Strong (${SCORE_TIERS.strong}+)`;
-  if (chip70) chip70.textContent = `Pursue now (${SCORE_TIERS.pursue}+)`;
-  const minSel = $("#filterMinScore");
-  if (minSel) {
-    const o70 = minSel.querySelector('option[value="70"]');
-    const o40 = minSel.querySelector('option[value="40"]');
-    if (o70) o70.textContent = `Score ${SCORE_TIERS.pursue}+ only`;
-    if (o40) o40.textContent = `Strong prospects (${SCORE_TIERS.strong}+)`;
-  }
   const heroBtn = $("#reviewHighPriorityBtn");
-  if (heroBtn) heroBtn.textContent = `Show pursue-now leads (${SCORE_TIERS.pursue}+)`;
+  if (heroBtn) heroBtn.textContent = "Review pursue-now leads";
+  document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
+    const mode = VIEW_MODES[btn.dataset.view];
+    if (mode) btn.textContent = mode.label;
+  });
+}
+
+function syncViewModeButtons() {
+  document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.view === filterState.viewMode);
+  });
+}
+
+function applyViewMode(viewMode) {
+  if (!VIEW_MODES[viewMode]) return;
+  filterState.viewMode = viewMode;
+  filterState.minScore = VIEW_MODES[viewMode].minScore;
+  filterState.priority = "";
+  commitFilterState();
+}
+
+function formatRefreshedShort(iso) {
+  if (!iso) return "Sorted by opportunity score";
+  try {
+    const d = new Date(iso);
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 1) return "Updated just now";
+    if (mins < 60) return `Updated ${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `Updated ${hrs} hr ago`;
+    return formatRefreshed(iso);
+  } catch {
+    return "Sorted by opportunity score";
+  }
 }
 
 function updateExportButtonLabel() {
   const btn = $("#exportBtn");
   if (!btn) return;
   const n = getFilteredLeads().length;
-  btn.textContent = n ? `Export CSV (${n})` : "Export CSV";
+  btn.textContent = n ? `Export (${n})` : "Export";
   btn.disabled = !n && allLeads.length > 0;
 }
 
@@ -172,31 +176,10 @@ function formatRefreshed(iso) {
   }
 }
 
-function initHelpPanel() {
-  const panel = $("#helpPanel");
-  const dismissBtn = $("#dismissHelpBtn");
-  if (!panel) return;
-  if (localStorage.getItem(HELP_DISMISSED_KEY) === "1") {
-    panel.open = false;
-    panel.classList.add("help-panel--dismissed");
-  }
-  dismissBtn?.addEventListener("click", () => {
-    localStorage.setItem(HELP_DISMISSED_KEY, "1");
-    panel.open = false;
-    panel.classList.add("help-panel--dismissed");
-  });
-}
-
 function reviewHighPriorityLeads() {
-  filterState = {
-    ...createDefaultFilterState(),
-    minScore: SCORE_TIERS.pursue,
-    priority: "High",
-    quickMode: "pursue",
-  };
-  commitFilterState();
+  applyViewMode("pursue");
   const n = getFilteredLeads().length;
-  showToast(n ? `Showing ${n} high-priority lead${n === 1 ? "" : "s"}` : "No high-priority leads in this queue");
+  if (!n) showToast("No pursue-now leads in this snapshot", true);
   document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -342,9 +325,6 @@ function renderQueueHero(payload, rowsForTiers) {
   if (!dateEl) return;
 
   const d = payload?.incorporation_date || getCurrentDate();
-  const m = payload?.metrics || {};
-  const uk = m.uk_count ?? 0;
-  const mu = m.mauritius_count ?? 0;
   const tierRows = rowsForTiers ?? (allLeads.length ? allLeads : []);
 
   if (!d) {
@@ -355,33 +335,23 @@ function renderQueueHero(payload, rowsForTiers) {
   }
 
   dateEl.textContent = formatDisplayDate(d);
-  if (refreshedEl) {
-    refreshedEl.textContent = payload?.last_refreshed
-      ? formatRefreshed(payload.last_refreshed)
-      : "Incorporation date — when companies were registered";
-  }
   if (statsEl) {
     const tiers = countTiersFromRows(tierRows);
     statsEl.innerHTML = `
-      <div class="hero-stat-grid">
-        <article class="hero-stat-card">
-          <span class="hero-stat-card__value">${m.total_leads ?? 0}</span>
-          <span class="hero-stat-card__label">In queue</span>
-        </article>
-        <article class="hero-stat-card hero-stat-card--a">
-          <span class="hero-stat-card__value">${tiers.pursue}</span>
-          <span class="hero-stat-card__label">Pursue now</span>
-        </article>
-        <article class="hero-stat-card hero-stat-card--b">
-          <span class="hero-stat-card__value">${tiers.month}</span>
-          <span class="hero-stat-card__label">This month</span>
-        </article>
-        <article class="hero-stat-card hero-stat-card--muted">
-          <span class="hero-stat-card__value hero-stat-card__value--split">UK ${uk}<span class="hero-stat-card__sep">·</span>MU ${mu}</span>
-          <span class="hero-stat-card__label">By jurisdiction</span>
-        </article>
-      </div>
+      <p class="decision-metric decision-metric--pursue">
+        <span class="decision-metric__value">${tiers.pursue}</span>
+        <span class="decision-metric__label">pursue-now leads</span>
+      </p>
+      <p class="decision-metric decision-metric--strong">
+        <span class="decision-metric__value">${tiers.month}</span>
+        <span class="decision-metric__label">strong leads</span>
+      </p>
     `;
+  }
+  if (refreshedEl) {
+    refreshedEl.textContent = payload?.last_refreshed
+      ? formatRefreshedShort(payload.last_refreshed)
+      : "Sorted by opportunity score";
   }
   syncSnapshotControls();
 }
@@ -389,8 +359,16 @@ function renderQueueHero(payload, rowsForTiers) {
 function updateTabGuidance() {
   const el = $("#tabGuidance");
   if (!el) return;
-  const members = poolMembersForTab().join(", ");
-  el.textContent = `Strong prospects (score 40+) shown by default. Assign to ${members}, open a row for score detail, verify on the registry, then outreach.`;
+  const n = getFilteredLeads().length;
+  const mode = VIEW_MODES[filterState.viewMode]?.label || "High priority";
+  if (!allLeads.length) {
+    el.textContent = "";
+    return;
+  }
+  el.textContent =
+    n === 0
+      ? `No leads in “${mode}” view — try Strong or All.`
+      : `${n} lead${n === 1 ? "" : "s"} ready · ${mode} view · sorted by score`;
 }
 
 function updateDateNavButtons() {
@@ -463,7 +441,7 @@ function renderMetricsZeroState() {
 
 function renderQueue(payload) {
   renderQueueHero(payload);
-  $("#panelSubtitle").textContent = `${payload.count ?? 0} leads in this queue`;
+  $("#panelSubtitle").textContent = "";
   const notice = $("#mauritiusMissingNotice");
   if (notice) notice.hidden = true;
   updateTabGuidance();
@@ -646,6 +624,14 @@ function tierBadge(score) {
   return `<span class="tier-badge tier-badge--${t.key}">${t.label}</span>`;
 }
 
+function scoreDecisionCell(score) {
+  const s = Number(score) || 0;
+  const t = tierFromScore(s);
+  return `<span class="score-decision score-decision--${t.key}" title="${escapeHtml(t.label)}">
+    <span class="score-decision__num">${s}</span>
+  </span>`;
+}
+
 function scoreBadge(score) {
   const s = Number(score) || 0;
   let cls = "score-low";
@@ -708,49 +694,6 @@ function displaySic(lead) {
   return escapeHtml(sic);
 }
 
-function applySortFromControl() {
-  readFilterStateFromDom();
-  applyFilterStateToDom();
-}
-
-function hasActiveFilters() {
-  const d = createDefaultFilterState();
-  return (
-    filterState.search !== d.search ||
-    filterState.minScore !== d.minScore ||
-    filterState.priority !== d.priority ||
-    filterState.assigned !== d.assigned ||
-    filterState.jurisdiction !== d.jurisdiction ||
-    filterState.sortKey !== d.sortKey ||
-    filterState.sortDir !== d.sortDir
-  );
-}
-
-function updateResetFiltersVisibility() {
-  const btn = $("#resetFilters");
-  if (btn) btn.hidden = !hasActiveFilters();
-}
-
-function syncQuickFilterChips() {
-  $("#quickFilters")?.querySelectorAll(".chip[data-quick]").forEach((btn) => {
-    const q = btn.dataset.quick;
-    let active = false;
-    if (q === "unassigned") active = filterState.quickMode === "unassigned";
-    else if (q === "score-40") active = filterState.quickMode === "strong";
-    else if (q === "score-70") active = filterState.quickMode === "pursue";
-    else if (q === "score-0") active = filterState.quickMode === "all";
-    btn.classList.toggle("active", active);
-  });
-}
-
-function applyQuickFilter(quick) {
-  const preset = QUICK_FILTER_PRESETS[quick];
-  if (!preset) return;
-  filterState = { ...filterState, ...preset };
-  if (quick !== "unassigned") filterState.priority = "";
-  commitFilterState();
-}
-
 function resetFilters() {
   filterState = createDefaultFilterState();
   commitFilterState();
@@ -798,13 +741,6 @@ function updateSortHeaders() {
       th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
     }
   });
-  const sortSelect = $("#filterSort");
-  if (sortSelect) {
-    const val = `${sortKey}-${sortDir}`;
-    if ([...sortSelect.options].some((o) => o.value === val)) {
-      sortSelect.value = val;
-    }
-  }
 }
 
 function assignedOptions(lead, selected) {
@@ -936,7 +872,6 @@ function renderTable() {
   }
 
   const filtered = sortLeads(getFilteredLeads());
-  updateResetFiltersVisibility();
 
   if (!filtered.length) {
     showFilteredEmptyState(allLeads.length > 0);
@@ -953,18 +888,13 @@ function renderTable() {
       return `
         <tr class="lead-row lead-row--tier-${tierKey}${selected}" data-lead-id="${escapeHtml(lid)}" role="button" tabindex="0" aria-label="Open ${label} lead profile">
           <td>${companyCell(lead)}</td>
-          <td>${tierBadge(lead.score)}</td>
-          <td>${scoreWithBar(lead.score)}</td>
+          <td>${scoreDecisionCell(lead.score)}</td>
           <td class="prospect-reason-cell">${whyContactCell(lead)}</td>
-          <td>${displaySic(lead)}</td>
-          <td>${escapeHtml(lead.incorporation_date || "—")}</td>
           <td class="assign-cell field-with-save">
-            <select class="assign-select" data-lead-id="${escapeHtml(lid)}">
+            <select class="assign-select" data-lead-id="${escapeHtml(lid)}" aria-label="Assign ${label}">
               <option value="">—</option>${assignedOptions(lead)}
             </select>
           </td>
-          <td class="notes-cell">${notesCell(lead)}</td>
-          <td>${verifyCell(lead)}</td>
           <td class="col-chevron" aria-hidden="true"><span class="row-chevron">›</span></td>
         </tr>`;
     })
@@ -990,13 +920,6 @@ function renderTable() {
     sel.addEventListener("change", () => onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel));
   });
 
-  body.querySelectorAll(".notes-indicator").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openDetailPanel(btn.dataset.leadId);
-    });
-  });
-
   updateSortHeaders();
   updateTableScrollHint();
   updateExportButtonLabel();
@@ -1010,12 +933,12 @@ function showFilteredEmptyState(hasLeadsInSnapshot) {
   }
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state table-empty-state--inline">
-      <h3 class="table-empty-state__title">No leads match your filters</h3>
-      <p class="table-empty-state__text">Try a wider score band, clear search, or reset filters to see the full queue for this date.</p>
-      <button type="button" class="btn btn-secondary" id="emptyResetFilters">Reset filters</button>
+      <h3 class="table-empty-state__title">No leads in this view</h3>
+      <p class="table-empty-state__text">Try Strong or All, or clear your search.</p>
+      <button type="button" class="btn btn-secondary" id="emptyViewAll">Show all leads</button>
     </div>
   </td></tr>`;
-  $("#emptyResetFilters")?.addEventListener("click", resetFilters);
+  $("#emptyViewAll")?.addEventListener("click", () => applyViewMode("all"));
 }
 
 function updateTableScrollHint() {
@@ -1444,17 +1367,8 @@ function showBriefContent(brief) {
 }
 
 function init() {
-  initHelpPanel();
   $("#reviewHighPriorityBtn")?.addEventListener("click", reviewHighPriorityLeads);
-  $("#moreFiltersBtn")?.addEventListener("click", () => {
-    const panel = $("#moreFilters");
-    const btn = $("#moreFiltersBtn");
-    if (!panel || !btn) return;
-    const open = panel.hidden;
-    panel.hidden = !open;
-    btn.setAttribute("aria-expanded", String(open));
-  });
-  $("#refreshBtn").addEventListener("click", () => fetchLeads(true));
+  $("#refreshBtn")?.addEventListener("click", () => fetchLeads(true));
   $("#demoMode").addEventListener("change", async () => {
     await loadAvailableDates();
     fetchDataStatus();
@@ -1491,19 +1405,10 @@ function init() {
     e.preventDefault();
     resetFilters();
   });
-  $("#quickFilters")?.querySelectorAll(".chip[data-quick]").forEach((btn) => {
-    btn.addEventListener("click", () => applyQuickFilter(btn.dataset.quick));
+  document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => applyViewMode(btn.dataset.view));
   });
-  $("#resetFilters")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    resetFilters();
-  });
-  $("#filterSearch").addEventListener("input", rerenderFromDom);
-  $("#filterMinScore")?.addEventListener("change", rerenderFromDom);
-  $("#filterPriority").addEventListener("change", rerenderFromDom);
-  $("#filterAssigned").addEventListener("change", rerenderFromDom);
-  $("#filterJurisdiction").addEventListener("change", rerenderFromDom);
-  $("#filterSort").addEventListener("change", rerenderFromDom);
+  $("#filterSearch")?.addEventListener("input", rerenderFromDom);
 
   $$("th.sortable").forEach((th) => {
     th.addEventListener("click", () => {
@@ -1520,7 +1425,6 @@ function init() {
 
   applyScoreTierLabels();
   applyFilterStateToDom();
-  syncQuickFilterChips();
 
   const header = $(".header");
   const tableWrap = document.querySelector(".table-wrap");

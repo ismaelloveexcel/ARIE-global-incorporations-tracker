@@ -8,18 +8,18 @@ Use this before marking the Incorporation Monitor front end complete or requesti
 - [ ] Every opening tag has a matching closing tag; run through [validator.w3.org](https://validator.w3.org/) or IDE HTML validation on `index.html`.
 - [ ] Table `colspan` matches column count (currently **10**; keep in sync with `TABLE_COLSPAN` in `app.js`).
 
-## 2. Filter state (single source of truth)
+## 2. View mode (single source of truth)
 
-- [ ] All filtering reads from `filterState` in `app.js` (not ad-hoc DOM reads in multiple places).
-- [ ] Quick chips, dropdowns, search, and “Show pursue-now leads” update the same `filterState` object.
-- [ ] Reset restores `createDefaultFilterState()` and re-renders queue + table.
-- [ ] Score thresholds come from `SCORE_TIERS` in `app.js` (labels generated via `applyScoreTierLabels()`).
+- [ ] All filtering reads from `filterState` in `app.js` (`viewMode`: pursue | strong | all).
+- [ ] View-mode buttons, search, and **Review pursue-now leads** update the same `filterState`.
+- [ ] Default on load is **High priority** (pursue, score ≥ 70).
+- [ ] Score thresholds come from `SCORE_TIERS` in `app.js`.
 
 Manual smoke test:
 
-1. Click **Pursue now** chip → min score dropdown shows 70, chip active.
-2. Change min score manually → chip highlights match inferred `quickMode`.
-3. Click **Reset** → default strong (40+) view returns.
+1. Load app → **High priority** view active, pursue-now leads shown.
+2. Switch to **Strong** → score band widens; hero hint updates.
+3. **Review pursue-now leads** → returns to High priority view.
 
 ## 3. Accessibility
 
