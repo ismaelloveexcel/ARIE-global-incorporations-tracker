@@ -121,6 +121,7 @@ function readFilterStateFromDom() {
 
 function commitFilterState() {
   applyFilterStateToDom();
+  syncViewModeButtons();
   updateExportButtonLabel();
   updateTabGuidance();
   renderTable();
@@ -143,7 +144,9 @@ function applyScoreTierLabels() {
 
 function syncViewModeButtons() {
   document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.view === filterState.viewMode);
+    const on = btn.dataset.view === filterState.viewMode;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
   });
 }
 
@@ -271,6 +274,7 @@ function applyOperationalMode(meta) {
 
 async function loadMeta() {
   const res = await fetch("/api/meta");
+  if (!res.ok) throw new Error("Could not reach the app server");
   const data = await res.json();
   team = data.team || [];
   assignmentPools = data.assignment_pools || {};
@@ -791,8 +795,9 @@ function renderTrustStrip(statusData) {
     healthLabel = "Stale";
   }
 
+  const snapshotLabel = date ? formatDisplayDate(date) : "—";
   el.innerHTML = `
-    <span class="trust-strip__item trust-strip__item--snapshot">Snapshot: <strong>${escapeHtml(snapshotFile)}</strong> · Generated ${formatTrustGenerated(generatedIso)}</span>
+    <span class="trust-strip__item trust-strip__item--snapshot">Snapshot: <strong>${escapeHtml(snapshotLabel)}</strong> · Generated ${formatTrustGenerated(generatedIso)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item">UK: <strong>Updated ${formatTrustUtc(uk.file_modified)}</strong> · ${ukCount} leads</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
@@ -811,9 +816,15 @@ function showQueueLoadError(message) {
   const el = $("#queueErrorBanner");
   if (!el) return;
   el.hidden = false;
-  el.innerHTML = `<p><strong>Unable to load this snapshot.</strong> ${escapeHtml(
-    message || "Try another date or contact operations."
+  el.innerHTML = `<p><strong>Unable to load snapshot data.</strong> ${escapeHtml(
+    message || "Please retry or contact operations."
   )}</p>`;
+}
+
+function showConnectivityFailure() {
+  showQueueLoadError("Please retry or contact operations.");
+  renderMetricsZeroState();
+  showTableErrorState();
 }
 
 function renderTableStateCell(title, text, actionsHtml = "") {
@@ -841,24 +852,29 @@ function showTableQuietDayState() {
 
 function showTableErrorState() {
   renderTableStateCell(
-    "Could not load queue",
-    isProductionMode
-      ? "Try another date or contact operations if this persists."
-      : "Check that the app server is running the latest code and that exports exist for this date."
+    "Unable to load snapshot data",
+    "Please retry or contact operations if this continues."
   );
 }
 
 function showTableEmptyState() {
-  const body = $("#leadsBody");
   const date = getCurrentDate();
   const detail = dateDetail(date);
   const canLoad =
     operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_snapshot;
-  const title = detail.has_snapshot ? "Quiet day" : "No snapshot for this date";
+  let title = "No prepared snapshots available";
+  if (date && detail.has_snapshot) {
+    title = "Quiet day — no leads in this queue";
+  } else if (date) {
+    title = "No snapshot for this date";
+  }
   let text;
   let primaryBtn = "";
   let secondaryLink = "";
-  if (isProductionMode) {
+  if (!appHasDates && !date) {
+    text =
+      "No incorporation snapshots are available yet. Contact operations if you expected yesterday's queue.";
+  } else if (isProductionMode) {
     text =
       "Try another date using the date menu. If you expected yesterday's queue, contact operations.";
   } else if (canLoad) {
@@ -1099,10 +1115,27 @@ function sortLeads(rows) {
 function updateSortHeaders() {
   $$("th.sortable").forEach((th) => {
     th.classList.remove("sorted-asc", "sorted-desc");
+    th.removeAttribute("aria-sort");
     if (th.dataset.sort === sortKey) {
       th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
+      th.setAttribute("aria-sort", sortDir === "asc" ? "ascending" : "descending");
     }
   });
+}
+
+function suggestedOwnerDisplayName(lead) {
+  const name = (lead?.assigned_to || "").trim();
+  if (name) return name;
+  const pool = poolMembersForTab();
+  return pool.length ? pool[0] : "—";
+}
+
+function suggestedOwnerCell(lead) {
+  const name = suggestedOwnerDisplayName(lead);
+  return `<span class="owner-suggestion" title="Suggested for triage — not saved as an assignment yet">
+    <span class="owner-suggestion__label">Suggested:</span>
+    <span class="owner-suggestion__name">${escapeHtml(name)}</span>
+  </span>`;
 }
 
 function assignedOptions(lead, selected) {
@@ -1252,12 +1285,8 @@ function renderTable() {
           <td>${companyCell(lead)}</td>
           <td>${scoreDecisionCell(lead.score)}</td>
           <td class="prospect-reason-cell">${whyContactCell(lead)}</td>
-          <td class="assign-cell field-with-save">
-            <select class="assign-select assign-select--suggested" data-lead-id="${escapeHtml(lid)}" aria-label="Suggested owner for ${label}">
-              <option value="">— suggest —</option>${assignedOptions(lead)}
-            </select>
-          </td>
-          <td class="col-chevron" aria-hidden="true"><span class="row-chevron">›</span></td>
+          <td class="assign-cell">${suggestedOwnerCell(lead)}</td>
+          <td class="col-chevron"><span class="row-open-label">Open</span><span class="row-chevron" aria-hidden="true">›</span></td>
         </tr>`;
     })
     .join("");
@@ -1277,11 +1306,6 @@ function renderTable() {
     });
   });
 
-  body.querySelectorAll(".assign-select").forEach((sel) => {
-    sel.addEventListener("click", (e) => e.stopPropagation());
-    sel.addEventListener("change", () => onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel));
-  });
-
   updateSortHeaders();
   updateTableScrollHint();
   updateExportButtonLabel();
@@ -1295,8 +1319,24 @@ function showFilteredEmptyState(hasLeadsInSnapshot) {
   }
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state table-empty-state--inline">
-      <h3 class="table-empty-state__title">No leads in this view</h3>
-      <p class="table-empty-state__text">Try Strong or All, or clear your search.</p>
+      <h3 class="table-empty-state__title">${escapeHtml(
+        filterState.search.trim()
+          ? "No leads match your search"
+          : filterState.viewMode === "pursue"
+            ? "No pursue-now leads for this snapshot"
+            : filterState.viewMode === "strong"
+              ? "No strong leads for this snapshot"
+              : "No leads match current filters"
+      )}</h3>
+      <p class="table-empty-state__text">${escapeHtml(
+        filterState.search.trim()
+          ? `Nothing matches “${filterState.search.trim()}”. Try another term or switch to All view.`
+          : filterState.viewMode === "pursue"
+            ? "Try Strong or All to see more of the queue, or pick another prepared date."
+            : filterState.viewMode === "strong"
+              ? "Try All view to see the full queue for this date."
+              : "Try Strong or All, or clear your search."
+      )}</p>
       <button type="button" class="btn btn-secondary" id="emptyViewAll">Show all leads</button>
     </div>
   </td></tr>`;
@@ -1339,8 +1379,8 @@ function syncTableFromLead(lead) {
   const lid = leadKey(lead);
   const row = document.querySelector(`tr[data-lead-id="${CSS.escape(lid)}"]`);
   if (!row) return;
-  const sel = row.querySelector(".assign-select");
-  if (sel) sel.value = lead.assigned_to || "";
+  const ownerCell = row.querySelector(".assign-cell");
+  if (ownerCell) ownerCell.innerHTML = suggestedOwnerCell(lead);
   const notesCellEl = row.querySelector(".notes-cell");
   if (notesCellEl) notesCellEl.innerHTML = notesCell(lead);
 }
@@ -1476,9 +1516,13 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
 function exportCsv() {
   const rows = sortLeads(getFilteredLeads());
   const btn = $("#exportBtn");
-  if (btn) btn.disabled = true;
+  if (btn?.disabled) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Preparing export…";
+  }
   if (!rows.length) {
-    if (btn) btn.disabled = false;
+    updateExportButtonLabel();
     showToast("Nothing to export for the current filters", true);
     return;
   }
@@ -1505,7 +1549,7 @@ function exportCsv() {
   a.click();
   URL.revokeObjectURL(a.href);
   showToast(`Exported ${rows.length} filtered lead${rows.length === 1 ? "" : "s"}`);
-  if (btn) btn.disabled = false;
+  updateExportButtonLabel();
 }
 
 /* —— Intelligence panel —— */
@@ -1596,6 +1640,7 @@ function renderDetailShell(lead) {
   $("#detailBody").innerHTML = `
     <section class="intel-section detail-company-header">
       <h3 class="detail-company-title">${escapeHtml(lead.company_name)}</h3>
+      <p id="detailSummary" class="detail-summary muted">${escapeHtml(lead.jurisdiction || "—")} · Score ${Number(lead.score) || 0}</p>
       <div class="lead-card-meta">
         ${tierBadge(lead.score)}
         <span class="jurisdiction-badge">${escapeHtml(lead.jurisdiction || "—")}</span>
@@ -1626,13 +1671,12 @@ function renderDetailShell(lead) {
     </section>
 
     <section class="intel-section">
-      <h3>Assignment &amp; Notes</h3>
-      <label class="detail-field field-with-save">
-        <span>Suggested owner</span>
-        <select id="detailAssign" class="detail-select assign-select--suggested">
-          <option value="">— suggest —</option>${assignedOptions(lead, lead.assigned_to)}
-        </select>
-      </label>
+      <h3>Notes &amp; status</h3>
+      <div class="detail-field">
+        <span class="detail-field__label">Suggested owner</span>
+        ${suggestedOwnerCell(lead)}
+        <p class="owner-suggestion__note">For triage only — not saved as an assignment until claim is available.</p>
+      </div>
       <label class="detail-field field-with-save">
         <span>Notes</span>
         <textarea id="detailNotes" class="notes-area" rows="3" placeholder="Add note…">${escapeHtml(lead.notes || "")}</textarea>
@@ -1649,9 +1693,6 @@ function renderDetailShell(lead) {
     </section>
   `;
 
-  $("#detailAssign").addEventListener("change", (e) =>
-    onAssign(leadKey(lead), { assigned_to: e.target.value }, e.target)
-  );
   $("#detailNotes").addEventListener("blur", (e) =>
     onAssign(leadKey(lead), { notes: e.target.value }, e.target)
   );
@@ -1926,10 +1967,14 @@ function init() {
     })
     .catch((e) => {
       console.error(e);
-      showToast("Could not start the app — refresh the page", true);
-      renderMetricsZeroState();
-      showTableEmptyState();
+      showToast("Could not connect to the app — please retry", true);
+      showConnectivityFailure();
     });
+
+  window.addEventListener("offline", () => {
+    showToast("You appear to be offline", true);
+    showConnectivityFailure();
+  });
 }
 
 init();

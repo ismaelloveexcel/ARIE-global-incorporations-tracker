@@ -3253,10 +3253,69 @@ body.panel-open {
   color: var(--ink-muted);
 }
 
-.assign-select--suggested {
+.owner-suggestion {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  background: #f4f6f9;
+  border: 1px dashed #c5ced9;
   color: var(--ink-muted);
-  border-style: dashed;
-  background: #fafbfc;
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.owner-suggestion__label {
+  font-style: italic;
+  font-weight: 500;
+}
+
+.owner-suggestion__name {
+  font-style: normal;
+  font-weight: 600;
+  color: #6b7c93;
+}
+
+.owner-suggestion__note {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.detail-summary {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.88rem;
+}
+
+.decision-ui .lead-row {
+  cursor: pointer;
+}
+
+.decision-ui .lead-row:hover td {
+  background: rgba(201, 168, 76, 0.06);
+}
+
+.row-open-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-right: 0.15rem;
+}
+
+.decision-ui .lead-row:hover .row-open-label {
+  color: var(--ink);
+}
+
+.table-wrap--soft {
+  min-height: 16rem;
+}
+
+.decision-hero__stats {
+  min-height: 3.5rem;
 }
 
 @media (max-width: 768px) {
