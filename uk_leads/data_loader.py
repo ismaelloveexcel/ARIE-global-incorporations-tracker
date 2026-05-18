@@ -1,4 +1,4 @@
-"""Load and merge UK web-app CSV rows with Mauritius pipeline exports."""
+"""Load and merge UK + Mauritius rows from the canonical pipeline export."""
 from __future__ import annotations
 
 import csv
@@ -9,7 +9,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from uk_leads import refresh_meta
-from uk_leads.core import csv_path_for_date, load_csv
 from uk_leads.dashboard import MU_VERIFY_URL, is_mauritius_includable, lead_id
 from uk_leads.enrichment import enrich_row
 
@@ -65,6 +64,37 @@ def pipeline_row_to_lead(row: dict[str, str], run_date: str) -> dict:
     return base
 
 
+def _is_uk_pipeline_row(raw: dict[str, str]) -> bool:
+    source = (raw.get("source") or "").strip().lower()
+    if source == "companies_house":
+        return True
+    return (raw.get("jurisdiction") or "").strip() == "UK"
+
+
+def uk_pipeline_export_stats(date: str) -> dict:
+    """Count UK rows in the canonical pipeline export."""
+    path = pipeline_export_path(date)
+    if not path.exists():
+        return {
+            "exists": False,
+            "path": str(path),
+            "row_count": 0,
+        }
+
+    count = 0
+    with path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for raw in reader:
+            if _is_uk_pipeline_row(raw):
+                count += 1
+
+    return {
+        "exists": True,
+        "path": str(path),
+        "row_count": count,
+    }
+
+
 def mauritius_export_stats(date: str) -> dict:
     """Count Mauritius rows in pipeline export: total, GBC/AC included, domestic excluded."""
     path = pipeline_export_path(date)
@@ -101,6 +131,24 @@ def mauritius_export_stats(date: str) -> dict:
     }
 
 
+def load_uk_from_pipeline(date: str) -> list[dict]:
+    path = pipeline_export_path(date)
+    if not path.exists():
+        logger.warning("Pipeline export not found for UK rows: %s", path)
+        return []
+
+    rows: list[dict] = []
+    with path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for raw in reader:
+            if not _is_uk_pipeline_row(raw):
+                continue
+            rows.append(pipeline_row_to_lead(raw, run_date=date))
+
+    logger.info("Loaded %d UK rows from %s", len(rows), path)
+    return rows
+
+
 def load_mauritius_from_pipeline(date: str) -> list[dict]:
     path = pipeline_export_path(date)
     if not path.exists():
@@ -123,27 +171,29 @@ def load_mauritius_from_pipeline(date: str) -> list[dict]:
     return rows
 
 
-def load_uk_rows(date: str, demo: bool) -> list[dict]:
-    path = csv_path_for_date(date, demo=demo)
-    if not path.exists():
-        return []
-    return load_csv(path)
-
-
 def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict]:
     """
-    Merge UK CSV + Mauritius pipeline export for *date*.
-    Returns (enriched rows, meta dict with source paths and warnings).
+    Merge UK + Mauritius rows from exports/{date}.csv (canonical pipeline snapshot).
+
+    The *demo* parameter is retained for API compatibility; merge source is always the
+    pipeline export file, not uk-leads-* snapshot files.
     """
+    _ = demo
+    pipeline_path = pipeline_export_path(date)
     meta: dict = {
-        "uk_path": str(csv_path_for_date(date, demo=demo)),
-        "mauritius_path": str(pipeline_export_path(date)),
+        "pipeline_path": str(pipeline_path),
+        "uk_path": str(pipeline_path),
+        "mauritius_path": str(pipeline_path),
         "uk_count": 0,
         "mauritius_count": 0,
         "warnings": [],
     }
 
-    uk_rows = load_uk_rows(date, demo=demo)
+    uk_stats = uk_pipeline_export_stats(date)
+    meta["uk_pipeline_export_exists"] = uk_stats["exists"]
+    meta["uk_pipeline_export_stats"] = uk_stats
+
+    uk_rows = load_uk_from_pipeline(date)
     meta["uk_count"] = len(uk_rows)
 
     mu_stats = mauritius_export_stats(date)
@@ -152,8 +202,13 @@ def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict
 
     mu_rows = load_mauritius_from_pipeline(date)
     meta["mauritius_count"] = len(mu_rows)
-    if not mu_stats["exists"]:
-        meta["warnings"].append(f"No Mauritius export for {date}")
+    if not pipeline_path.exists():
+        meta["warnings"].append(f"No pipeline export for {date}")
+        meta["pipeline_export_missing"] = True
+    else:
+        meta["pipeline_export_missing"] = False
+    if not mu_stats["exists"] or mu_stats.get("gbc_ac", 0) == 0:
+        meta["warnings"].append(f"No Mauritius GBC/AC rows in pipeline export for {date}")
         meta["mauritius_export_missing"] = True
     else:
         meta["mauritius_export_missing"] = False
@@ -179,8 +234,6 @@ def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict
     return merged, meta
 
 
-_UK_DEMO_RE = re.compile(r"^uk-leads-demo-(\d{4}-\d{2}-\d{2})\.csv$")
-_UK_FULL_RE = re.compile(r"^uk-leads-(\d{4}-\d{2}-\d{2})\.csv$")
 _PIPELINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.csv$")
 
 
@@ -202,11 +255,9 @@ def _discover_export_dates() -> set[str]:
         if not path.is_file() or path.suffix.lower() != ".csv":
             continue
         name = path.name
-        for pattern in (_UK_DEMO_RE, _UK_FULL_RE, _PIPELINE_RE):
-            m = pattern.match(name)
-            if m:
-                discovered.add(m.group(1))
-                break
+        m = _PIPELINE_RE.match(name)
+        if m:
+            discovered.add(m.group(1))
     return discovered
 
 
@@ -217,24 +268,16 @@ def _calendar_nav_dates(lookback_days: int) -> list[str]:
 
 
 def _has_snapshot_files(date: str, demo: bool) -> bool:
-    if pipeline_export_path(date).exists():
-        return True
-    if csv_path_for_date(date, demo=demo).exists():
-        return True
-    if demo and csv_path_for_date(date, demo=False).exists():
-        return True
-    return False
+    _ = demo
+    return pipeline_export_path(date).exists()
 
 
 def _date_counts_for_scan(date: str, demo: bool) -> dict:
-    uk_path = csv_path_for_date(date, demo=demo)
-    uk_count = len(load_csv(uk_path)) if uk_path.exists() else 0
-    if uk_count == 0 and demo:
-        full_path = csv_path_for_date(date, demo=False)
-        if full_path.exists():
-            uk_count = len(load_csv(full_path))
+    _ = demo
+    uk_stats = uk_pipeline_export_stats(date)
+    uk_count = uk_stats.get("row_count", 0)
     mu_stats = mauritius_export_stats(date)
-    has_snapshot = _has_snapshot_files(date, demo=demo)
+    has_snapshot = _has_snapshot_files(date, demo=False)
     has_uk = uk_count > 0
     has_mauritius = mu_stats.get("gbc_ac", 0) > 0
     return {

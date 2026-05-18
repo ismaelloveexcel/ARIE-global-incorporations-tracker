@@ -229,10 +229,10 @@ def api_leads(
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
     rows, meta = _load_merged_rows(d, demo=demo)
 
-    if not rows and not Path(csv_path_for_date(d, demo=demo)).exists():
+    if not rows and not pipeline_export_path(d).exists():
         raise HTTPException(
             status_code=404,
-            detail=f"No data for {d}. Refresh UK leads or run the Mauritius pipeline.",
+            detail=f"No pipeline export for {d}. Run the daily pipeline (exports/{d}.csv).",
         )
 
     last = refresh_meta.get_last_refresh(d, demo)
