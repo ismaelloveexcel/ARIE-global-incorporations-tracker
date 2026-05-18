@@ -5,6 +5,7 @@ import csv
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from uk_leads.app_mode import is_production
 from uk_leads.core import csv_path_for_date
 from uk_leads.data_loader import mauritius_export_stats, pipeline_export_path
 from uk_leads.run_summary import load_run_summary
@@ -136,7 +137,7 @@ def _build_banner(
         "details": {},
     }
     display = _format_display_date(target)
-    pipeline_cmd = f"python main.py --date {target} --skip-difc"
+    pipeline_cmd = None if is_production() else f"python main.py --date {target} --skip-difc"
 
     if not is_today:
         if uk["exists"] or mu["exists"]:
@@ -208,14 +209,18 @@ def _build_banner(
         "FAILED",
         "PARTIAL",
     ):
+        mu_tail = (
+            "Mauritius will appear when the overnight snapshot includes it."
+            if is_production()
+            else "To add Mauritius, run the pipeline for this date."
+        )
         return {
             "type": "amber",
             "message": (
                 f"Mauritius data not available for {display}. "
-                "Showing UK leads only. "
-                "To add Mauritius, run the pipeline for this date."
+                f"Showing UK leads only. {mu_tail}"
             ),
-            "show_alerts_link": False,
+            "show_alerts_link": is_production(),
             "pipeline_command": pipeline_cmd,
             "auto_hide_seconds": None,
             "details": {"display_date": display, "variant": "mauritius_missing"},

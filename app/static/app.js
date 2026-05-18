@@ -23,6 +23,8 @@ let currentDate = "";
 let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
+let isProductionMode = false;
+let operatorRefreshAllowed = true;
 const TABLE_COLSPAN = 5;
 const SCORE_TIERS = { pursue: 70, strong: 40, monitor: 0 };
 const DEFAULT_MIN_SCORE = SCORE_TIERS.pursue;
@@ -212,6 +214,28 @@ function leadKey(lead) {
   return lead?.lead_id || lead?.company_number || "";
 }
 
+function applyOperationalMode(meta) {
+  isProductionMode = !!meta?.is_production;
+  operatorRefreshAllowed = meta?.operator_refresh_allowed !== false;
+
+  const demoBox = $("#demoMode");
+  if (demoBox && !demoBox.dataset.userTouched) {
+    demoBox.checked = !!meta?.default_demo_cap;
+  }
+
+  const devLink = $("#devOpsLink");
+  if (devLink) devLink.hidden = meta?.show_dev_link === false;
+
+  const refreshBtn = $("#refreshBtn");
+  if (refreshBtn) {
+    refreshBtn.hidden = !operatorRefreshAllowed;
+    refreshBtn.disabled = !operatorRefreshAllowed;
+    refreshBtn.title = operatorRefreshAllowed
+      ? "Refresh register data"
+      : "Register data is prepared overnight — contact operations if a date is missing";
+  }
+}
+
 async function loadMeta() {
   const res = await fetch("/api/meta");
   const data = await res.json();
@@ -219,6 +243,7 @@ async function loadMeta() {
   assignmentPools = data.assignment_pools || {};
   hasOpenaiKey = !!data.has_openai_key;
   hasCompaniesHouseKey = !!data.has_api_key;
+  applyOperationalMode(data);
   const assignedFilter = $("#filterAssigned");
   if (assignedFilter) {
     team.forEach((name) => {
@@ -369,7 +394,9 @@ function renderQueueHero(payload, rowsForTiers) {
     if (refreshedEl) {
       refreshedEl.textContent = appHasDates
         ? "Pick a date in the header to load leads"
-        : "Run the daily pipeline or refresh register data in Settings";
+        : isProductionMode
+          ? "Choose a snapshot date — contact operations if data is missing"
+          : "Run the daily pipeline or refresh register data in Settings";
     }
     renderHeroTierStats(statsEl, []);
     return;
@@ -532,7 +559,6 @@ function wireBannerCopyButton(btn, raw) {
 }
 
 function renderNoEnvironmentDataBanner() {
-  const cmd = pipelineCommandToday();
   const el = $("#dataStatusBanner");
   if (bannerHideTimer) {
     clearTimeout(bannerHideTimer);
@@ -540,6 +566,12 @@ function renderNoEnvironmentDataBanner() {
   }
   el.className = "data-status-banner data-status-banner--amber";
   el.hidden = false;
+  if (isProductionMode) {
+    el.innerHTML =
+      '<p class="data-status-text">⚠ No incorporation snapshot is available in this environment yet. Try another date or contact operations.</p>';
+    return;
+  }
+  const cmd = pipelineCommandToday();
   el.innerHTML = `<p class="data-status-text">⚠ No pipeline data found for this environment. Run the pipeline to generate today's leads.
     <span class="data-status-cmd-wrap"><code class="data-status-cmd">${escapeHtml(cmd)}</code>
     <button type="button" class="data-status-copy" data-default-label="Copy">Copy</button></span>
@@ -551,14 +583,24 @@ function showTableEmptyState() {
   const body = $("#leadsBody");
   const date = getCurrentDate();
   const detail = dateDetail(date);
-  const canLoad = canFetchUk && hasCompaniesHouseKey && date && !detail.has_data;
-  const title = canLoad ? "No leads loaded for this date" : "No leads for this date";
-  const text = canLoad
-    ? "Use ‹ › or the date menu to pick another day, or load UK register data for this date."
-    : "Choose another date, refresh register data, or run the daily pipeline for this environment.";
-  const primaryBtn = canLoad
-    ? `<button type="button" class="btn btn-primary" id="emptyRefreshData">Load UK data for this date</button>`
-    : `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>`;
+  const canLoad =
+    operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_data;
+  const title = "No leads for this date";
+  let text;
+  let primaryBtn = "";
+  let secondaryLink = "";
+  if (isProductionMode) {
+    text =
+      "Try another date using the date menu. If you expected yesterday's queue, contact operations.";
+  } else if (canLoad) {
+    text = "Use the date menu to pick another day, or load UK register data for this date.";
+    primaryBtn = `<button type="button" class="btn btn-primary" id="emptyRefreshData">Load UK data for this date</button>`;
+    secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
+  } else {
+    text = "Choose another date, refresh register data, or run the daily pipeline for this environment.";
+    primaryBtn = `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>`;
+    secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
+  }
 
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state">
@@ -568,7 +610,7 @@ function showTableEmptyState() {
       <p class="table-empty-state__text">${text}</p>
       <div class="table-empty-state__actions">
         ${primaryBtn}
-        <a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>
+        ${secondaryLink}
       </div>
     </div>
   </td></tr>`;
@@ -596,10 +638,10 @@ function renderDataStatusBanner(status) {
   el.hidden = false;
 
   let actions = "";
-  if (banner.show_alerts_link) {
+  if (banner.show_alerts_link && !isProductionMode) {
     actions += ` <a class="data-status-link" href="/dev#alerts" target="_blank" rel="noopener">Open Alerts →</a>`;
   }
-  if (banner.pipeline_command) {
+  if (banner.pipeline_command && !isProductionMode) {
     const cmd = escapeHtml(banner.pipeline_command);
     actions += ` <span class="data-status-cmd-wrap"><code class="data-status-cmd">${cmd}</code> <button type="button" class="data-status-copy">Copy</button></span>`;
   }
@@ -1032,7 +1074,12 @@ function syncTableFromLead(lead) {
 }
 
 async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
-  if (!allowAuto || !canFetchMauritius || !payload?.meta?.mauritius_export_missing) {
+  if (
+    !operatorRefreshAllowed ||
+    !allowAuto ||
+    !canFetchMauritius ||
+    !payload?.meta?.mauritius_export_missing
+  ) {
     return payload;
   }
   const date = getCurrentDate();
@@ -1061,6 +1108,13 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
 }
 
 async function fetchLeads(refresh = false, allowAutoFetch = true) {
+  if (refresh && !operatorRefreshAllowed) {
+    showToast(
+      "Register data is prepared overnight. Try another date or contact operations.",
+      true
+    );
+    return;
+  }
   const date = getCurrentDate();
   const demo = $("#demoMode").checked;
   if (!date) {
@@ -1078,7 +1132,15 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
       await loadAvailableDates();
       res = await fetch(`/api/leads?${base}`);
     }
-    if (!res.ok && !refresh && allowAutoFetch && res.status === 404 && canFetchUk && hasCompaniesHouseKey) {
+    if (
+      !res.ok &&
+      !refresh &&
+      allowAutoFetch &&
+      operatorRefreshAllowed &&
+      res.status === 404 &&
+      canFetchUk &&
+      hasCompaniesHouseKey
+    ) {
       const detail = dateDetail(date);
       if (!detail.has_data) {
         return fetchLeads(true, false);
@@ -1454,6 +1516,8 @@ function init() {
   $("#reviewHighPriorityBtn")?.addEventListener("click", reviewHighPriorityLeads);
   $("#refreshBtn")?.addEventListener("click", () => fetchLeads(true));
   $("#demoMode").addEventListener("change", async () => {
+    const demoBox = $("#demoMode");
+    if (demoBox) demoBox.dataset.userTouched = "1";
     await loadAvailableDates();
     fetchDataStatus();
     if (!appHasDates) {

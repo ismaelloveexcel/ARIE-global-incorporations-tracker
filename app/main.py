@@ -24,6 +24,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from uk_leads import assignments, refresh_meta
+from uk_leads.app_mode import is_production, mode_config, operator_refresh_allowed
 from uk_leads.core import (
     DEMO_MIN_SCORE,
     DEMO_TOP,
@@ -62,6 +63,16 @@ _MU_PEOPLE_MESSAGE = (
 )
 
 app = FastAPI(title="Arie Incorporation Monitor", version="1.0.0")
+
+_OPERATOR_REFRESH_DETAIL = (
+    "Live registry refresh is disabled in production. "
+    "Use the nightly pipeline snapshot or /dev for engineering refresh."
+)
+
+
+def _guard_operator_refresh() -> None:
+    if not operator_refresh_allowed():
+        raise HTTPException(status_code=403, detail=_OPERATOR_REFRESH_DETAIL)
 
 
 def _get_cached_people(lead_id: str) -> dict | None:
@@ -173,7 +184,7 @@ def _package_response(
 
 
 @app.get("/api/available-dates")
-def api_available_dates(demo: bool = True):
+def api_available_dates(demo: bool = False):
     payload = scan_available_dates(demo=demo)
     payload["can_fetch_uk"] = bool(os.environ.get("COMPANIES_HOUSE_API_KEY"))
     payload["can_fetch_mauritius"] = mauritius_auto_refresh_enabled()
@@ -189,7 +200,7 @@ def _maybe_auto_refresh_mauritius(incorporation_date: str) -> dict | None:
 @app.get("/api/data-status")
 def api_data_status(
     target_date: str | None = Query(None, alias="date"),
-    demo: bool = True,
+    demo: bool = False,
 ):
     d = target_date or (date.today()).isoformat()
     try:
@@ -214,13 +225,14 @@ def api_meta():
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
         "workflow_statuses": assignments.WORKFLOW_STATUSES,
         "priority_thresholds": {"high": 70, "medium": 40},
+        **mode_config(),
     }
 
 
 @app.get("/api/leads")
 def api_leads(
     incorporation_date: str | None = None,
-    demo: bool = True,
+    demo: bool = False,
     tab: str | None = Query(
         None,
         description="Queue tab: direct_clients (default). introducers is deprecated and returns an empty list.",
@@ -230,19 +242,26 @@ def api_leads(
     rows, meta = _load_merged_rows(d, demo=demo)
 
     if not rows and not pipeline_export_path(d).exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No pipeline export for {d}. Run the daily pipeline (exports/{d}.csv).",
-        )
+        if is_production():
+            detail = (
+                f"No incorporation snapshot is available for {d} yet. "
+                "Try another date or contact operations."
+            )
+        else:
+            detail = (
+                f"No pipeline export for {d}. Run the daily pipeline (exports/{d}.csv) "
+                "or use /dev to refresh."
+            )
+        raise HTTPException(status_code=404, detail=detail)
 
     last = refresh_meta.get_last_refresh(d, demo)
-    uk_path = csv_path_for_date(d, demo=demo)
-    if not last and uk_path.exists():
-        last = datetime_from_mtime(uk_path)
+    pipe = pipeline_export_path(d)
+    if not last and pipe.exists():
+        last = datetime_from_mtime(pipe)
     if not last:
-        mu_path = pipeline_export_path(d)
-        if mu_path.exists():
-            last = datetime_from_mtime(mu_path)
+        uk_path = csv_path_for_date(d, demo=demo)
+        if uk_path.exists():
+            last = datetime_from_mtime(uk_path)
 
     return _package_response(rows, tab, d, demo, meta, last_refreshed=last)
 
@@ -250,9 +269,10 @@ def api_leads(
 @app.post("/api/refresh")
 def api_refresh(
     incorporation_date: str | None = None,
-    demo: bool = True,
+    demo: bool = False,
     tab: str | None = Query(None),
 ):
+    _guard_operator_refresh()
     if not os.environ.get("COMPANIES_HOUSE_API_KEY"):
         raise HTTPException(status_code=503, detail="COMPANIES_HOUSE_API_KEY not set in .env")
 
@@ -278,9 +298,10 @@ def api_refresh(
 @app.post("/api/refresh/mauritius")
 def api_refresh_mauritius(
     incorporation_date: str | None = None,
-    demo: bool = True,
+    demo: bool = False,
     tab: str | None = Query(None),
 ):
+    _guard_operator_refresh()
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
     try:
         date.fromisoformat(d)
