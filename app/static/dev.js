@@ -233,7 +233,6 @@ function renderRoadmap() {
       (row, i) => `
     <tr data-idx="${i}">
       <td contenteditable data-field="jurisdiction">${esc(row.jurisdiction)}</td>
-      <td contenteditable data-field="type">${esc(row.type)}</td>
       <td contenteditable data-field="status">${esc(row.status_icon || "")} ${esc(row.status)}</td>
       <td contenteditable data-field="source">${esc(row.source)}</td>
       <td contenteditable data-field="notes">${esc(row.notes)}</td>

@@ -25,6 +25,8 @@ let detailLead = null;
 let bannerHideTimer = null;
 let isProductionMode = false;
 let operatorRefreshAllowed = true;
+let lastDataStatus = null;
+let detailReturnFocus = null;
 const TABLE_COLSPAN = 5;
 const SCORE_TIERS = { pursue: 70, strong: 40, monitor: 0 };
 const DEFAULT_MIN_SCORE = SCORE_TIERS.pursue;
@@ -54,6 +56,10 @@ let datesApiOk = true;
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function isDemoCapEnabled() {
+  return !!$("#demoMode")?.checked;
 }
 
 function pipelineCommandToday() {
@@ -164,11 +170,31 @@ function formatRefreshedShort(iso) {
   }
 }
 
+function exportScopeSlug() {
+  const mode = filterState.viewMode;
+  if (mode === "pursue") return "pursue";
+  if (mode === "strong") return "strong";
+  return "all";
+}
+
+function exportScopeLabel() {
+  const mode = filterState.viewMode;
+  if (mode === "pursue") return "pursue-now";
+  if (mode === "strong") return "strong";
+  return "all";
+}
+
 function updateExportButtonLabel() {
   const btn = $("#exportBtn");
   if (!btn) return;
   const n = getFilteredLeads().length;
-  btn.textContent = n ? `Export (${n})` : "Export";
+  const scope = exportScopeLabel();
+  btn.textContent = n
+    ? `Export current view (${n} ${scope})`
+    : "Export current view";
+  btn.title = n
+    ? `Download ${n} ${scope} leads as CSV (current filters and sort order)`
+    : "Download the leads currently shown (filters and sort applied)";
   btn.disabled = !n && allLeads.length > 0;
 }
 
@@ -234,6 +260,13 @@ function applyOperationalMode(meta) {
       ? "Refresh register data"
       : "Register data is prepared overnight — contact operations if a date is missing";
   }
+
+  const badge = $("#envBadge");
+  if (badge && meta?.is_production !== undefined) {
+    badge.textContent = meta.is_production ? "LIVE SNAPSHOT" : "DEV MODE";
+    badge.classList.toggle("env-badge--live", !!meta.is_production);
+    badge.classList.toggle("env-badge--dev", !meta.is_production);
+  }
 }
 
 async function loadMeta() {
@@ -244,6 +277,12 @@ async function loadMeta() {
   hasOpenaiKey = !!data.has_openai_key;
   hasCompaniesHouseKey = !!data.has_api_key;
   applyOperationalMode(data);
+  if (data.canonical_pipeline_queue !== true) {
+    showToast(
+      "This app server is out of date — stop it and run: python -m app.main",
+      true
+    );
+  }
   const assignedFilter = $("#filterAssigned");
   if (assignedFilter) {
     team.forEach((name) => {
@@ -256,7 +295,7 @@ async function loadMeta() {
 }
 
 async function loadAvailableDates() {
-  const demo = $("#demoMode").checked;
+  const demo = isDemoCapEnabled();
   try {
     const res = await fetch(`/api/available-dates?demo=${demo}`);
     datesApiOk = res.ok;
@@ -303,12 +342,52 @@ function dateDetail(date) {
   );
 }
 
+function upsertDateDetailFromPayload(data) {
+  if (!data?.incorporation_date) return;
+  const m = data.metrics || {};
+  const uk = Number(m.uk_count) || 0;
+  const mu = Number(m.mauritius_count) || 0;
+  const entry = {
+    date: data.incorporation_date,
+    uk_count: uk,
+    mauritius_count: mu,
+    has_uk: uk > 0,
+    has_mauritius: mu > 0,
+    has_data: uk > 0 || mu > 0,
+    has_snapshot: uk > 0 || mu > 0,
+    mauritius_export_exists: mu > 0,
+  };
+  const idx = dateDetails.findIndex((d) => d.date === entry.date);
+  if (idx >= 0) {
+    dateDetails[idx] = { ...dateDetails[idx], ...entry };
+  } else {
+    dateDetails.push(entry);
+  }
+}
+
+function refreshDateSelectLabels() {
+  const sel = $("#dateSelect");
+  if (!sel || sel.hidden) return;
+  [...sel.options].forEach((opt) => {
+    if (opt.value) opt.textContent = dateOptionLabel(opt.value);
+  });
+}
+
+function dateHasLoadedQueue(date) {
+  if (lastPayload?.incorporation_date !== date) return false;
+  const m = lastPayload.metrics || {};
+  const total =
+    Number(lastPayload.count) ||
+    (Number(m.uk_count) || 0) + (Number(m.mauritius_count) || 0);
+  return total > 0;
+}
+
 function dateOptionLabel(d) {
   const label = formatDisplayDate(d);
   const detail = dateDetail(d);
-  if (detail.has_data) return label;
-  if (detail.has_snapshot) return `${label} · empty`;
-  return `${label} · not loaded`;
+  if (detail.has_data || dateHasLoadedQueue(d)) return label;
+  if (detail.has_snapshot) return `${label} · quiet day`;
+  return label;
 }
 
 function poolMembersForTab() {
@@ -380,6 +459,20 @@ function renderHeroTierStats(statsEl, tierRows) {
   `;
 }
 
+function heroTierRows(payload, rowsForTiers) {
+  if (rowsForTiers !== undefined) return rowsForTiers;
+  const activeDate = payload?.incorporation_date || getCurrentDate();
+  if (
+    !allLeads.length ||
+    !lastPayload?.incorporation_date ||
+    lastPayload.incorporation_date !== activeDate ||
+    activeDate !== getCurrentDate()
+  ) {
+    return [];
+  }
+  return allLeads;
+}
+
 function renderQueueHero(payload, rowsForTiers) {
   const dateEl = $("#queueHeroDate");
   const refreshedEl = $("#queueHeroRefreshed");
@@ -387,7 +480,7 @@ function renderQueueHero(payload, rowsForTiers) {
   if (!dateEl) return;
 
   const d = payload?.incorporation_date || getCurrentDate();
-  const tierRows = rowsForTiers ?? (allLeads.length ? allLeads : []);
+  const tierRows = heroTierRows(payload, rowsForTiers);
 
   if (!d) {
     dateEl.textContent = appHasDates ? "Choose a snapshot date" : "No snapshot loaded yet";
@@ -404,6 +497,22 @@ function renderQueueHero(payload, rowsForTiers) {
 
   dateEl.textContent = formatDisplayDate(d);
   renderHeroTierStats(statsEl, tierRows);
+  const mixEl = $("#queueHeroMix");
+  if (mixEl) {
+    const counts =
+      lastPayload?.incorporation_date === d && lastPayload?.metrics
+        ? lastPayload.metrics
+        : null;
+    const ukN = counts ? counts.uk_count ?? 0 : countUkMu(tierRows).uk;
+    const muN = counts ? counts.mauritius_count ?? 0 : countUkMu(tierRows).mu;
+    if (ukN > 0 || muN > 0) {
+      mixEl.hidden = false;
+      mixEl.textContent = `${ukN} UK · ${muN} Mauritius`;
+    } else {
+      mixEl.hidden = true;
+      mixEl.textContent = "";
+    }
+  }
   if (refreshedEl) {
     refreshedEl.textContent = payload?.last_refreshed
       ? formatRefreshedShort(payload.last_refreshed)
@@ -416,15 +525,24 @@ function updateTabGuidance() {
   const el = $("#tabGuidance");
   if (!el) return;
   const n = getFilteredLeads().length;
-  const mode = VIEW_MODES[filterState.viewMode]?.label || "High priority";
+  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.pursue;
+  const min = mode.minScore;
+  const modePhrase =
+    filterState.viewMode === "pursue" ? "pursue-now" : mode.label.toLowerCase();
+  const search = filterState.search.trim();
   if (!allLeads.length) {
     el.textContent = "";
     return;
   }
-  el.textContent =
-    n === 0
-      ? `No leads in “${mode}” view — try Strong or All.`
-      : `${n} lead${n === 1 ? "" : "s"} ready · ${mode} view · sorted by score`;
+  if (n === 0) {
+    el.textContent = search
+      ? `No ${modePhrase} leads match “${search}” — try Strong or All.`
+      : `No leads in ${modePhrase} view (score ≥${min}) — try Strong or All.`;
+    return;
+  }
+  el.textContent = search
+    ? `Showing ${n} ${modePhrase} leads matching “${search}” (score ≥${min})`
+    : `Showing ${n} ${modePhrase} leads (score ≥${min}) · sorted by score`;
 }
 
 function updateDateNavButtons() {
@@ -438,9 +556,14 @@ function updateDateNavButtons() {
   $("#dateNext").disabled = idx <= 0;
 }
 
+/** Prev/next move along prepared snapshots only (availableDates), never calendar padding. */
 function navigateDate(delta) {
+  if (!availableDates.length) return;
   const idx = availableDates.indexOf(getCurrentDate());
-  if (idx < 0) return;
+  if (idx < 0) {
+    setSelectedDate(availableDates[0]);
+    return;
+  }
   const next = idx - delta;
   if (next < 0 || next >= availableDates.length) return;
   setSelectedDate(availableDates[next]);
@@ -451,6 +574,12 @@ function setSelectedDate(date) {
   if ($("#dateSelect") && !$("#dateSelect").hidden) {
     $("#dateSelect").value = date;
   }
+  allLeads = [];
+  lastPayload = null;
+  hideQueueLoadError();
+  renderQueueHero({ incorporation_date: date }, []);
+  renderTable();
+  updateTabGuidance();
   updateDateNavButtons();
   fetchDataStatus();
   fetchLeads(false);
@@ -494,7 +623,7 @@ function setPanelSubtitle(text) {
 }
 
 function renderQueueZeroState() {
-  renderQueueHero(null);
+  renderQueueHero({ incorporation_date: getCurrentDate() || null }, []);
   setPanelSubtitle(appHasDates ? "" : "No snapshot data in this environment");
   updateTabGuidance();
 }
@@ -579,13 +708,153 @@ function renderNoEnvironmentDataBanner() {
   wireBannerCopyButton(el.querySelector(".data-status-copy"), cmd);
 }
 
+function formatTrustUtc(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return `${d.toISOString().replace("T", " ").slice(11, 16)} UTC`;
+  } catch {
+    return "—";
+  }
+}
+
+function formatTrustGenerated(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function exportAgeHours(iso) {
+  if (!iso) return null;
+  try {
+    return (Date.now() - new Date(iso).getTime()) / 3_600_000;
+  } catch {
+    return null;
+  }
+}
+
+const TRUST_STALE_HOURS = 30;
+
+function renderTrustStrip(statusData) {
+  const el = $("#trustStripInner");
+  if (!el) return;
+  const date = getCurrentDate();
+  const loaded =
+    lastPayload?.incorporation_date === date && Number(lastPayload?.count) >= 0
+      ? lastPayload
+      : null;
+  const uk = statusData?.uk || {};
+  const mu = statusData?.mauritius || {};
+  const ukCount = loaded?.metrics?.uk_count ?? uk.row_count ?? 0;
+  const muCount = loaded?.metrics?.mauritius_count ?? mu.row_count ?? 0;
+  const inView = loaded?.count ?? (allLeads.length || ukCount + muCount);
+  const generatedIso = uk.file_modified || mu.file_modified;
+  const snapshotFile = date ? `exports/${date}.csv` : "—";
+
+  let health = "healthy";
+  let healthLabel = "Healthy";
+  if ($("#queueErrorBanner") && !$("#queueErrorBanner").hidden) {
+    health = "error";
+    healthLabel = "Error";
+  } else if (!date) {
+    health = "unknown";
+    healthLabel = "Pick a date";
+  } else if (!uk.exists && !mu.exists) {
+    health = "missing";
+    healthLabel = "No snapshot";
+  } else if (uk.exists && !mu.exists) {
+    health = "partial";
+    healthLabel = "Partial";
+  } else if (statusData?.banner?.type === "red") {
+    health = "error";
+    healthLabel = "Issue";
+  } else if (statusData?.banner?.type === "amber") {
+    health = "partial";
+    healthLabel = "Check";
+  }
+
+  const ageH = exportAgeHours(generatedIso);
+  if (health === "healthy" && ageH != null && ageH > TRUST_STALE_HOURS) {
+    health = "stale";
+    healthLabel = "Stale";
+  }
+
+  el.innerHTML = `
+    <span class="trust-strip__item trust-strip__item--snapshot">Snapshot: <strong>${escapeHtml(snapshotFile)}</strong> · Generated ${formatTrustGenerated(generatedIso)}</span>
+    <span class="trust-strip__sep" aria-hidden="true">|</span>
+    <span class="trust-strip__item">UK: <strong>Updated ${formatTrustUtc(uk.file_modified)}</strong> · ${ukCount} leads</span>
+    <span class="trust-strip__sep" aria-hidden="true">|</span>
+    <span class="trust-strip__item">Mauritius: <strong>Updated ${formatTrustUtc(mu.file_modified)}</strong> · ${muCount} leads</span>
+    <span class="trust-strip__sep" aria-hidden="true">|</span>
+    <span class="trust-strip__item">Queue: <span class="trust-strip__health trust-strip__health--${health}">${healthLabel}</span>${inView ? ` · ${inView} in view` : ""}</span>
+  `;
+}
+
+function hideQueueLoadError() {
+  const el = $("#queueErrorBanner");
+  if (el) el.hidden = true;
+}
+
+function showQueueLoadError(message) {
+  const el = $("#queueErrorBanner");
+  if (!el) return;
+  el.hidden = false;
+  el.innerHTML = `<p><strong>Unable to load this snapshot.</strong> ${escapeHtml(
+    message || "Try another date or contact operations."
+  )}</p>`;
+}
+
+function renderTableStateCell(title, text, actionsHtml = "") {
+  const body = $("#leadsBody");
+  body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
+    <div class="table-empty-state">
+      <h3 class="table-empty-state__title">${escapeHtml(title)}</h3>
+      <p class="table-empty-state__text">${text}</p>
+      ${actionsHtml}
+    </div>
+  </td></tr>`;
+}
+
+function showTableLoadingState() {
+  renderTableStateCell("Loading queue…", "Fetching incorporation snapshot for the selected date.");
+}
+
+function showTableQuietDayState() {
+  const dateLabel = formatDisplayDate(getCurrentDate());
+  renderTableStateCell(
+    "Quiet day",
+    `The ${dateLabel} snapshot exists but has no direct-client leads in this queue.`
+  );
+}
+
+function showTableErrorState() {
+  renderTableStateCell(
+    "Could not load queue",
+    isProductionMode
+      ? "Try another date or contact operations if this persists."
+      : "Check that the app server is running the latest code and that exports exist for this date."
+  );
+}
+
 function showTableEmptyState() {
   const body = $("#leadsBody");
   const date = getCurrentDate();
   const detail = dateDetail(date);
   const canLoad =
-    operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_data;
-  const title = "No leads for this date";
+    operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_snapshot;
+  const title = detail.has_snapshot ? "Quiet day" : "No snapshot for this date";
   let text;
   let primaryBtn = "";
   let secondaryLink = "";
@@ -669,7 +938,7 @@ async function fetchDataStatus() {
     return;
   }
   const date = getCurrentDate() || todayISO();
-  const demo = $("#demoMode").checked;
+  const demo = isDemoCapEnabled();
   try {
     const res = await fetch(
       `/api/data-status?date=${encodeURIComponent(date)}&demo=${demo}`
@@ -679,6 +948,8 @@ async function fetchDataStatus() {
       return;
     }
     const data = await res.json();
+    lastDataStatus = data;
+    renderTrustStrip(data);
     if (!appHasDates && (!data.banner || data.banner.type === "none") && !hasQueue) {
       renderNoEnvironmentDataBanner();
       return;
@@ -686,6 +957,7 @@ async function fetchDataStatus() {
     renderDataStatusBanner(data);
   } catch {
     if (!appHasDates && !hasQueue) renderNoEnvironmentDataBanner();
+    renderTrustStrip(lastDataStatus);
   }
 }
 
@@ -981,8 +1253,8 @@ function renderTable() {
           <td>${scoreDecisionCell(lead.score)}</td>
           <td class="prospect-reason-cell">${whyContactCell(lead)}</td>
           <td class="assign-cell field-with-save">
-            <select class="assign-select" data-lead-id="${escapeHtml(lid)}" aria-label="Assign ${label}">
-              <option value="">—</option>${assignedOptions(lead)}
+            <select class="assign-select assign-select--suggested" data-lead-id="${escapeHtml(lid)}" aria-label="Suggested owner for ${label}">
+              <option value="">— suggest —</option>${assignedOptions(lead)}
             </select>
           </td>
           <td class="col-chevron" aria-hidden="true"><span class="row-chevron">›</span></td>
@@ -1086,7 +1358,7 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
   if (!date) return payload;
 
   setLoading(true, "Loading Mauritius register data…");
-  const demo = $("#demoMode").checked;
+  const demo = isDemoCapEnabled();
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
   try {
     const res = await fetch(`/api/refresh/mauritius?${base}`, { method: "POST" });
@@ -1116,14 +1388,16 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     return;
   }
   const date = getCurrentDate();
-  const demo = $("#demoMode").checked;
+  const demo = isDemoCapEnabled();
   if (!date) {
     renderMetricsZeroState();
     showTableEmptyState();
     fetchDataStatus();
     return;
   }
+  hideQueueLoadError();
   setLoading(true, refresh ? "Loading UK register data…" : "Loading queue…");
+  showTableLoadingState();
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
   try {
@@ -1142,7 +1416,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
       hasCompaniesHouseKey
     ) {
       const detail = dateDetail(date);
-      if (!detail.has_data) {
+      if (!detail.has_snapshot && !detail.has_data) {
         return fetchLeads(true, false);
       }
     }
@@ -1154,6 +1428,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     data = await fetchMauritiusIfNeeded(data, allowAutoFetch);
     lastPayload = data;
     allLeads = data.leads || [];
+    upsertDateDetailFromPayload(data);
     if (data.incorporation_date) {
       currentDate = data.incorporation_date;
       if (!availableDates.includes(data.incorporation_date)) {
@@ -1161,13 +1436,21 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
       }
       appHasDates = availableDates.length > 0;
       syncSnapshotControls();
+      refreshDateSelectLabels();
       updateDateNavButtons();
     }
     if ($("#dateSelect") && !$("#dateSelect").hidden) {
       $("#dateSelect").value = currentDate;
     }
     renderMetrics(data);
-    renderTable();
+    if (!data.count && !(data.leads || []).length) {
+      const detail = dateDetail(data.incorporation_date || date);
+      if (detail.has_snapshot) showTableQuietDayState();
+      else showTableEmptyState();
+    } else {
+      renderTable();
+    }
+    renderTrustStrip(lastDataStatus);
     if (openLeadId) {
       const still = allLeads.find((l) => leadKey(l) === openLeadId);
       if (still) openDetailPanel(openLeadId, true);
@@ -1175,9 +1458,14 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     }
     showToast(refresh ? `Refreshed — ${data.count} leads in view` : `Loaded ${data.count} leads`);
   } catch (e) {
-    showToast(e.message || "Failed to load", true);
+    const msg = e.message || "Failed to load";
+    showToast(msg, true);
+    showQueueLoadError(msg);
+    allLeads = [];
+    lastPayload = null;
     renderMetricsZeroState();
-    showTableEmptyState();
+    showTableErrorState();
+    renderTrustStrip(lastDataStatus);
     fetchDataStatus();
   } finally {
     setLoading(false);
@@ -1213,7 +1501,7 @@ function exportCsv() {
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `arie-direct-clients-${getCurrentDate() || "export"}.csv`;
+  a.download = `arie_leads_${getCurrentDate() || "export"}_${exportScopeSlug()}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
   showToast(`Exported ${rows.length} filtered lead${rows.length === 1 ? "" : "s"}`);
@@ -1222,11 +1510,38 @@ function exportCsv() {
 
 /* —— Intelligence panel —— */
 
+function detailPanelFocusables() {
+  const panel = $("#detailPanel");
+  if (!panel) return [];
+  return [...panel.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((el) => el.offsetParent !== null);
+}
+
+function handleDetailPanelKeydown(e) {
+  if (!openLeadId || e.key !== "Tab") return;
+  const items = detailPanelFocusables();
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 function openDetailPanel(leadId, skipAnim = false) {
   const lead = allLeads.find((l) => leadKey(l) === leadId);
   if (!lead) return;
+  const row = document.querySelector(`tr[data-lead-id="${CSS.escape(leadId)}"]`);
+  detailReturnFocus = row || document.activeElement;
   openLeadId = leadId;
   detailLead = lead;
+  document.body.dataset.panelScrollLock = document.body.style.overflow || "";
+  document.body.style.overflow = "hidden";
   $$(".lead-row").forEach((r) => r.classList.toggle("selected", r.dataset.leadId === leadId));
 
   $("#detailCompanyName").textContent = "Lead profile";
@@ -1245,6 +1560,7 @@ function openDetailPanel(leadId, skipAnim = false) {
   }
   loadDetailPeople(lead);
   loadExistingBrief(leadId);
+  $("#detailClose")?.focus();
 }
 
 function closeDetailPanel() {
@@ -1254,9 +1570,14 @@ function closeDetailPanel() {
   $("#detailBackdrop").classList.remove("is-open");
   $("#detailPanel").classList.remove("is-open");
   document.body.classList.remove("panel-open");
+  document.body.style.overflow = document.body.dataset.panelScrollLock || "";
+  delete document.body.dataset.panelScrollLock;
+  const restore = detailReturnFocus;
+  detailReturnFocus = null;
   setTimeout(() => {
     $("#detailBackdrop").hidden = true;
     $("#detailPanel").hidden = true;
+    if (restore && typeof restore.focus === "function") restore.focus();
   }, 220);
 }
 
@@ -1307,9 +1628,9 @@ function renderDetailShell(lead) {
     <section class="intel-section">
       <h3>Assignment &amp; Notes</h3>
       <label class="detail-field field-with-save">
-        <span>Assigned to</span>
-        <select id="detailAssign" class="detail-select">
-          <option value="">—</option>${assignedOptions(lead, lead.assigned_to)}
+        <span>Suggested owner</span>
+        <select id="detailAssign" class="detail-select assign-select--suggested">
+          <option value="">— suggest —</option>${assignedOptions(lead, lead.assigned_to)}
         </select>
       </label>
       <label class="detail-field field-with-save">
@@ -1360,7 +1681,7 @@ async function loadDetailPeople(lead, options = {}) {
   const { refresh = false } = options;
   const lid = leadKey(lead);
   const date = getCurrentDate();
-  const demo = $("#demoMode").checked;
+  const demo = isDemoCapEnabled();
   const officersEl = $("#detailOfficersSection");
   const pscEl = $("#detailPscSection");
 
@@ -1489,7 +1810,7 @@ async function generateBrief() {
   btn.textContent = "Generating…";
   try {
     const res = await fetch(
-      `/api/leads/${encodeURIComponent(lid)}/brief?incorporation_date=${encodeURIComponent(getCurrentDate())}&demo=${$("#demoMode").checked}`,
+      `/api/leads/${encodeURIComponent(lid)}/brief?incorporation_date=${encodeURIComponent(getCurrentDate())}&demo=${isDemoCapEnabled()}`,
       { method: "POST" }
     );
     if (!res.ok) throw new Error("Brief failed");
@@ -1515,7 +1836,7 @@ function showBriefContent(brief) {
 function init() {
   $("#reviewHighPriorityBtn")?.addEventListener("click", reviewHighPriorityLeads);
   $("#refreshBtn")?.addEventListener("click", () => fetchLeads(true));
-  $("#demoMode").addEventListener("change", async () => {
+  $("#demoMode")?.addEventListener("change", async () => {
     const demoBox = $("#demoMode");
     if (demoBox) demoBox.dataset.userTouched = "1";
     await loadAvailableDates();
@@ -1533,8 +1854,9 @@ function init() {
   $("#dateNext").addEventListener("click", () => navigateDate(1));
   $("#dateSelect").addEventListener("change", () => setSelectedDate($("#dateSelect").value));
 
-  $("#copyMuCmd").addEventListener("click", () => {
-    const cmd = $("#muPipelineCmd").textContent;
+  $("#copyMuCmd")?.addEventListener("click", () => {
+    const cmd = $("#muPipelineCmd")?.textContent;
+    if (!cmd) return;
     navigator.clipboard.writeText(cmd).then(() => showToast("Command copied"));
   });
 
@@ -1542,6 +1864,7 @@ function init() {
   $("#detailBackdrop").addEventListener("click", closeDetailPanel);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && openLeadId) closeDetailPanel();
+    handleDetailPanelKeydown(e);
   });
 
   const rerenderFromDom = () => {

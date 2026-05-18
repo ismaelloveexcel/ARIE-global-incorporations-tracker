@@ -91,7 +91,8 @@ def test_api_leads_404_without_pipeline_export(exports_dir):
     client = TestClient(app)
     response = client.get("/api/leads", params={"incorporation_date": "2099-12-31"})
     assert response.status_code == 404
-    assert "pipeline export" in response.json()["detail"].lower()
+    detail = response.json()["detail"].lower()
+    assert "snapshot" in detail or "pipeline" in detail
 
 
 def test_api_leads_returns_uk_from_pipeline(exports_dir, monkeypatch):

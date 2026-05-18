@@ -41,6 +41,7 @@ def test_operator_refresh_blocked_in_production(exports_dir, monkeypatch):
     client = TestClient(app)
     res = client.post("/api/refresh", params={"incorporation_date": "2026-05-20"})
     assert res.status_code == 403
+    assert "/dev" not in res.json()["detail"].lower()
 
 
 def test_operator_refresh_allowed_in_development(exports_dir, monkeypatch):

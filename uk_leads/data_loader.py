@@ -308,6 +308,7 @@ def scan_available_dates(demo: bool = True, lookback_days: int | None = None) ->
     if not navigable:
         return {
             "dates": [],
+            "calendar_dates": [],
             "snapshot_dates": [],
             "date_details": [],
             "recommended": None,
@@ -318,6 +319,8 @@ def scan_available_dates(demo: bool = True, lookback_days: int | None = None) ->
     date_details = [_date_counts_for_scan(d, demo=demo) for d in navigable]
     snapshot_dates = [d["date"] for d in date_details if d["has_snapshot"]]
     dates_with_data = [d["date"] for d in date_details if d["has_data"]]
+    # Operator UI: only days with a pipeline export — not the full calendar padding.
+    operator_dates = snapshot_dates if snapshot_dates else dates_with_data
 
     both = [d for d in date_details if d["has_uk"] and d["has_mauritius"]]
     if both:
@@ -334,9 +337,12 @@ def scan_available_dates(demo: bool = True, lookback_days: int | None = None) ->
         reason = "Most recent day in the navigation window"
 
     return {
-        "dates": navigable,
+        "dates": operator_dates,
+        "calendar_dates": navigable,
         "snapshot_dates": snapshot_dates,
-        "date_details": date_details,
+        "date_details": [d for d in date_details if d["date"] in set(operator_dates)]
+        if operator_dates
+        else date_details,
         "recommended": recommended,
         "lookback_days": lookback,
         "reason": reason,

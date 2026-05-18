@@ -26,16 +26,18 @@
             <p class="brand-eyebrow">Arie Finance</p>
             <h1>Incorporation Monitor</h1>
           </div>
+          <span class="env-badge {{ENV_BADGE_CLASS}}" id="envBadge">{{ENV_BADGE}}</span>
         </div>
         <div class="header-actions">
-          <div class="header-date-nav" id="dateNav" aria-label="Change snapshot date">
-            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous day" title="Previous day">‹</button>
+          <div class="header-date-nav" id="dateNav" aria-label="Navigate prepared snapshots">
+            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous prepared snapshot" title="Previous prepared snapshot">‹</button>
             <label class="header-date">
               <span class="visually-hidden">Snapshot date</span>
               <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
             </label>
-            <button type="button" class="btn-icon" id="dateNext" aria-label="Next day" title="Next day">›</button>
+            <button type="button" class="btn-icon" id="dateNext" aria-label="Next prepared snapshot" title="Next prepared snapshot">›</button>
           </div>
+          <!--@DEV_ONLY:START-->
           <button type="button" class="btn-icon" id="refreshBtn" aria-label="Refresh register data" title="Refresh register data">↻</button>
           <details class="header-utilities header-utilities--icon">
             <summary class="btn-icon" aria-label="Settings" title="Settings">⚙</summary>
@@ -47,15 +49,21 @@
               <a class="btn btn-ghost btn-sm" id="devOpsLink" href="/dev" target="_blank" rel="noopener">Operations</a>
             </div>
           </details>
+          <!--@DEV_ONLY:END-->
         </div>
       </div>
     </header>
+
+    <div class="trust-strip" id="trustStrip" role="status" aria-live="polite">
+      <div class="trust-strip__inner" id="trustStripInner">Checking snapshot status…</div>
+    </div>
 
     <div class="shell">
       <section class="decision-hero" aria-label="Today's priorities">
         <div class="decision-hero__copy">
           <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Incorporation snapshot</p>
           <h2 class="decision-hero__date" id="queueHeroDate">—</h2>
+          <p class="decision-hero__mix" id="queueHeroMix" hidden></p>
           <div class="decision-hero__stats" id="queueHeroStats"></div>
           <p class="decision-hero__updated" id="queueHeroRefreshed">—</p>
         </div>
@@ -67,14 +75,17 @@
 
       <p class="queue-guidance" id="tabGuidance" aria-live="polite"></p>
       <div id="dataStatusBanner" class="data-status-banner" hidden aria-live="polite"></div>
+      <div id="queueErrorBanner" class="queue-error-banner" hidden role="alert" aria-live="assertive"></div>
 
       <main class="main">
         <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
           <p id="mauritiusMissingText"></p>
+          <!--@DEV_ONLY:START-->
           <p class="notice-mu-hint" id="mauritiusMissingHint" hidden>
             <code id="muPipelineCmd"></code>
             <button type="button" class="btn btn-ghost btn-sm" id="copyMuCmd">Copy</button>
           </p>
+          <!--@DEV_ONLY:END-->
         </div>
 
         <form class="decision-bar" id="filtersForm" aria-label="View and search">
@@ -95,7 +106,7 @@
               <h2 id="panelTitle" class="visually-hidden">Lead queue</h2>
               <p id="panelSubtitle" class="panel-subtitle-muted" hidden></p>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" id="exportBtn" title="Export filtered leads to CSV">Export</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="exportBtn" title="Download the leads currently shown (filters and sort applied)">Export current view</button>
           </div>
           <div class="table-wrap table-wrap--soft">
             <table id="leadsTable">
@@ -105,12 +116,14 @@
                   <th scope="col" data-sort="company_name" class="sortable">Company</th>
                   <th scope="col" data-sort="score" class="sortable">Score</th>
                   <th scope="col">Reason</th>
-                  <th scope="col" data-sort="assigned_to" class="sortable">Assigned</th>
+                  <th scope="col" data-sort="assigned_to" class="sortable">
+                    <span class="col-hint">Suggested owner</span>
+                  </th>
                   <th scope="col" class="col-chevron"><span class="visually-hidden">Open</span></th>
                 </tr>
               </thead>
               <tbody id="leadsBody">
-                <tr><td colspan="5" class="empty">Loading…</td></tr>
+                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading queue…</p></div></td></tr>
               </tbody>
             </table>
           </div>

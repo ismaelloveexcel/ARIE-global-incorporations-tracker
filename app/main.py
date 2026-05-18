@@ -17,7 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -72,7 +72,17 @@ _OPERATOR_REFRESH_DETAIL = (
 
 def _guard_operator_refresh() -> None:
     if not operator_refresh_allowed():
-        raise HTTPException(status_code=403, detail=_OPERATOR_REFRESH_DETAIL)
+        detail = (
+            "Register data is prepared overnight. Try another date or contact operations."
+            if is_production()
+            else _OPERATOR_REFRESH_DETAIL
+        )
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def _guard_dev_only() -> None:
+    if is_production():
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def _get_cached_people(lead_id: str) -> dict | None:
@@ -226,6 +236,7 @@ def api_meta():
         "workflow_statuses": assignments.WORKFLOW_STATUSES,
         "priority_thresholds": {"high": 70, "medium": 40},
         **mode_config(),
+        "canonical_pipeline_queue": True,
     }
 
 
@@ -249,8 +260,8 @@ def api_leads(
             )
         else:
             detail = (
-                f"No pipeline export for {d}. Run the daily pipeline (exports/{d}.csv) "
-                "or use /dev to refresh."
+                f"No incorporation snapshot is available for {d} yet. "
+                "Try another date or contact operations."
             )
         raise HTTPException(status_code=404, detail=detail)
 
@@ -477,21 +488,25 @@ def api_get_brief(lead_id_key: str):
 
 @app.get("/dev")
 def dev_page():
+    _guard_dev_only()
     return FileResponse(STATIC / "dev.html")
 
 
 @app.get("/api/dev/health")
 def api_dev_health(incorporation_date: str | None = None):
+    _guard_dev_only()
     return run_health_checks(incorporation_date)
 
 
 @app.get("/api/dev/config")
 def api_dev_config_get():
+    _guard_dev_only()
     return load_config()
 
 
 @app.post("/api/dev/config")
 def api_dev_config_post(body: DevConfigUpdate):
+    _guard_dev_only()
     config = load_config()
     if body.assignment_pools is not None:
         config["assignment_pools"] = body.assignment_pools
@@ -504,11 +519,13 @@ def api_dev_config_post(body: DevConfigUpdate):
 
 @app.post("/api/dev/refresh/uk")
 def api_dev_refresh_uk(incorporation_date: str | None = None, demo: bool = True):
+    _guard_dev_only()
     return api_refresh(incorporation_date=incorporation_date, demo=demo)
 
 
 @app.post("/api/dev/refresh/mauritius")
 def api_dev_refresh_mauritius(incorporation_date: str | None = None):
+    _guard_dev_only()
     d = incorporation_date or date.today().isoformat()
     try:
         result = refresh_mauritius_for_date(d)
@@ -519,11 +536,13 @@ def api_dev_refresh_mauritius(incorporation_date: str | None = None):
 
 @app.get("/api/dev/pipeline-alerts")
 def api_dev_pipeline_alerts():
+    _guard_dev_only()
     return get_pipeline_alert_status()
 
 
 @app.get("/api/dev/stats")
 def api_dev_stats(incorporation_date: str | None = None, demo: bool = True):
+    _guard_dev_only()
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
     rows, _ = _load_merged_rows(d, demo=demo)
     direct = filter_tab_leads(rows, "direct_clients")
@@ -538,7 +557,9 @@ def api_dev_stats(incorporation_date: str | None = None, demo: bool = True):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    from app.page_html import render_index_html
+
+    return HTMLResponse(render_index_html())
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
