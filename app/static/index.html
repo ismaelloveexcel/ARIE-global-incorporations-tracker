@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arie Finance · Incorporation Monitor</title>
+    <title>Arie Corporate Leads Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Instrument+Serif:ital@0;1&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
@@ -15,32 +15,32 @@
   <body class="decision-ui">
     <div class="loading-overlay" id="loadingOverlay" hidden role="status" aria-live="assertive" aria-busy="false">
       <div class="spinner" aria-hidden="true"></div>
-      <p id="loadingText">Loading leads…</p>
+      <p id="loadingText">Retrieving incorporation records…</p>
     </div>
 
     <header class="header header--minimal">
       <div class="header-inner">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">A</span>
+          <a class="brand-home" href="https://www.ariefinance.com/" target="_blank" rel="noopener noreferrer" title="Arie Finance website"><span class="brand-mark" aria-hidden="true">A</span></a>
           <div>
             <p class="brand-eyebrow">Arie Finance</p>
-            <h1>Incorporation Monitor</h1>
+            <h1>Corporate Leads Intelligence</h1>
           </div>
           <span class="env-badge {{ENV_BADGE_CLASS}}" id="envBadge">{{ENV_BADGE}}</span>
         </div>
         <div class="header-actions">
           <div class="header-date-nav" id="dateNav" aria-label="Navigate prepared snapshots">
-            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous prepared snapshot" title="Previous prepared snapshot">‹</button>
+            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous prepared snapshot" title="Previous prepared snapshot"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-left"/></svg></button>
             <label class="header-date">
               <span class="visually-hidden">Snapshot date</span>
               <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
             </label>
-            <button type="button" class="btn-icon" id="dateNext" aria-label="Next prepared snapshot" title="Next prepared snapshot">›</button>
+            <button type="button" class="btn-icon" id="dateNext" aria-label="Next prepared snapshot" title="Next prepared snapshot"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-right"/></svg></button>
           </div>
           <!--@DEV_ONLY:START-->
-          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Refresh register data" title="Refresh register data">↻</button>
+          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Refresh register data" title="Refresh register data"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
           <details class="header-utilities header-utilities--icon">
-            <summary class="btn-icon" aria-label="Settings" title="Settings">⚙</summary>
+            <summary class="btn-icon" aria-label="Settings" title="Settings"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-settings"/></svg></summary>
             <div class="header-utilities__panel">
               <label class="toggle toggle--compact" id="demoCapWrap">
                 <input type="checkbox" id="demoMode" />
@@ -55,20 +55,20 @@
     </header>
 
     <div class="trust-strip" id="trustStrip" role="status" aria-live="polite">
-      <div class="trust-strip__inner" id="trustStripInner">Checking snapshot status…</div>
+      <div class="trust-strip__inner" id="trustStripInner">Verifying snapshot status…</div>
     </div>
 
     <div class="shell">
-      <section class="decision-hero" aria-label="Today's priorities">
+      <section class="decision-hero" aria-label="Daily corporate leads review">
         <div class="decision-hero__copy">
-          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Incorporation snapshot</p>
+          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Daily corporate leads review</p>
           <h2 class="decision-hero__date" id="queueHeroDate">—</h2>
-          <p class="decision-hero__mix" id="queueHeroMix" hidden></p>
-          <div class="decision-hero__stats" id="queueHeroStats"></div>
+          <p class="decision-hero__meta" id="queueHeroMeta" hidden></p>
+          <div class="hero-analytics" id="queueHeroStats" aria-live="polite"></div>
           <p class="decision-hero__updated" id="queueHeroRefreshed">—</p>
         </div>
         <div class="decision-hero__action">
-          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review pursue-now leads</button>
+          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review lead queue</button>
           <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
         </div>
       </section>
@@ -90,10 +90,17 @@
 
         <form class="decision-bar" id="filtersForm" aria-label="View and search">
           <div class="view-mode" id="viewMode" role="group" aria-label="View mode">
-            <button type="button" class="view-mode__btn active" data-view="pursue">High priority</button>
-            <button type="button" class="view-mode__btn" data-view="strong">Strong</button>
-            <button type="button" class="view-mode__btn" data-view="all">All</button>
+            <button type="button" class="view-mode__btn" data-view="strong">Evaluate Soon</button>
+            <button type="button" class="view-mode__btn active" data-view="all">All Leads</button>
           </div>
+          <label class="decision-bar__jurisdiction">
+            <span class="visually-hidden">Jurisdiction</span>
+            <select id="jurisdictionFilter" name="jurisdiction" aria-label="Jurisdiction">
+              <option value="">All jurisdictions</option>
+              <option value="UK">United Kingdom</option>
+              <option value="Mauritius">Mauritius</option>
+            </select>
+          </label>
           <label class="decision-bar__search">
             <span class="visually-hidden">Search company</span>
             <input type="search" id="filterSearch" name="search" placeholder="Search company…" autocomplete="off" />
@@ -115,15 +122,15 @@
                 <tr>
                   <th scope="col" data-sort="company_name" class="sortable">Company</th>
                   <th scope="col" data-sort="score" class="sortable">Score</th>
-                  <th scope="col">Reason</th>
+                  <th scope="col">Intelligence</th>
                   <th scope="col" data-sort="assigned_to" class="sortable">
-                    <span class="col-hint">Suggested owner</span>
+                    <span class="col-hint">Recommended RM</span>
                   </th>
-                  <th scope="col" class="col-chevron"><span class="col-hint">Open</span></th>
+                  <th scope="col" class="col-chevron"><span class="col-hint">Review</span></th>
                 </tr>
               </thead>
               <tbody id="leadsBody">
-                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading queue…</p></div></td></tr>
+                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading incorporation records…</p></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -135,7 +142,7 @@
     <aside class="detail-panel" id="detailPanel" hidden role="dialog" aria-modal="true" aria-labelledby="detailCompanyName" aria-describedby="detailSummary">
       <header class="detail-header">
         <h2 id="detailCompanyName">Lead profile</h2>
-        <button type="button" class="btn-close" id="detailClose" aria-label="Close panel">×</button>
+        <button type="button" class="btn-close" id="detailClose" aria-label="Close panel"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-close"/></svg></button>
       </header>
       <div class="detail-body" id="detailBody"></div>
     </aside>

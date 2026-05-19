@@ -19,6 +19,7 @@ def development_mode(monkeypatch):
 def test_production_index_omits_engineering_controls(production_mode):
     html = render_index_html()
     assert "LIVE SNAPSHOT" in html
+    assert "{{ENV_BADGE}}" not in html
     assert 'id="refreshBtn"' not in html
     assert 'id="devOpsLink"' not in html
     assert 'id="demoMode"' not in html
@@ -40,6 +41,7 @@ def test_production_index_served_over_http(production_mode):
 
     html = TestClient(app).get("/").text
     assert "LIVE SNAPSHOT" in html
+    assert "{{ENV_BADGE}}" not in html
     assert "DEV_ONLY" not in html
     assert "refreshBtn" not in html
     assert "devOpsLink" not in html
@@ -47,6 +49,7 @@ def test_production_index_served_over_http(production_mode):
     assert "muPipelineCmd" not in html
     assert "Previous prepared snapshot" in html
     assert "Export current view" in html
+    assert "Corporate Leads Intelligence" in html
 
 
 def test_production_blocks_dev_routes(production_mode):

@@ -79,7 +79,7 @@ def build_score_breakdown(row: dict[str, Any]) -> dict[str, Any]:
         "priority": priority_from_score(total),
         "components": components,
         "summary": (
-            "Fit for Arie client onboarding (payments, international structures, GBC/AC). "
-            "Not a credit rating — use with registry verification."
+            "Rule-based prioritisation from registry entity type, jurisdiction, UK SIC codes, "
+            "and company-name keyword heuristics. Not a credit rating — verify on source register."
         ),
     }

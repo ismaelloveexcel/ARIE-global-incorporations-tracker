@@ -28,20 +28,18 @@ let operatorRefreshAllowed = true;
 let lastDataStatus = null;
 let detailReturnFocus = null;
 const TABLE_COLSPAN = 5;
-const SCORE_TIERS = { pursue: 70, strong: 40, monitor: 0 };
-const DEFAULT_MIN_SCORE = SCORE_TIERS.pursue;
+const SCORE_TIERS = { high: 70, strong: 40, monitor: 0 };
 
 const VIEW_MODES = {
-  pursue: { minScore: SCORE_TIERS.pursue, label: "High priority" },
-  strong: { minScore: SCORE_TIERS.strong, label: "Strong" },
-  all: { minScore: 0, label: "All" },
+  strong: { minScore: SCORE_TIERS.strong, label: "Evaluate Soon" },
+  all: { minScore: 0, label: "All Leads" },
 };
 
 function createDefaultFilterState() {
   return {
     search: "",
-    viewMode: "pursue",
-    minScore: SCORE_TIERS.pursue,
+    viewMode: "all",
+    minScore: 0,
     priority: "",
     assigned: "",
     jurisdiction: "",
@@ -102,7 +100,9 @@ function syncSortGlobalsFromFilterState() {
 function applyFilterStateToDom() {
   const search = $("#filterSearch");
   if (search) search.value = filterState.search;
-  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.pursue;
+  const jurisdictionSel = $("#jurisdictionFilter");
+  if (jurisdictionSel) jurisdictionSel.value = filterState.jurisdiction || "";
+  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.all;
   filterState.minScore = mode.minScore;
   syncViewModeButtons();
   syncSortGlobalsFromFilterState();
@@ -111,6 +111,7 @@ function applyFilterStateToDom() {
 
 function readFilterStateFromDom() {
   filterState.search = ($("#filterSearch")?.value || "").trim();
+  filterState.jurisdiction = $("#jurisdictionFilter")?.value || "";
   const active = document.querySelector(".view-mode__btn.active");
   if (active?.dataset.view && VIEW_MODES[active.dataset.view]) {
     filterState.viewMode = active.dataset.view;
@@ -126,6 +127,8 @@ function commitFilterState() {
   updateTabGuidance();
   renderTable();
   renderQueueFromFiltered();
+  updateHeroMetaLine();
+  if (lastDataStatus) renderTrustStrip(lastDataStatus);
 }
 
 function setFilterState(partial) {
@@ -135,7 +138,9 @@ function setFilterState(partial) {
 
 function applyScoreTierLabels() {
   const heroBtn = $("#reviewHighPriorityBtn");
-  if (heroBtn) heroBtn.textContent = "Review pursue-now leads";
+  if (heroBtn) heroBtn.textContent = "Review lead queue";
+  const heroEyebrow = $("#queueHeroEyebrow");
+  if (heroEyebrow) heroEyebrow.textContent = "Daily corporate leads review";
   document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
     const mode = VIEW_MODES[btn.dataset.view];
     if (mode) btn.textContent = mode.label;
@@ -173,18 +178,29 @@ function formatRefreshedShort(iso) {
   }
 }
 
+function jurisdictionScopeSlug() {
+  const j = filterState.jurisdiction;
+  if (j === "UK") return "uk";
+  if (j === "Mauritius") return "mu";
+  return "";
+}
+
 function exportScopeSlug() {
   const mode = filterState.viewMode;
-  if (mode === "pursue") return "pursue";
-  if (mode === "strong") return "strong";
-  return "all";
+  const j = jurisdictionScopeSlug();
+  let base = "all";
+  if (mode === "strong") base = "strong";
+  return j ? `${base}_${j}` : base;
 }
 
 function exportScopeLabel() {
   const mode = filterState.viewMode;
-  if (mode === "pursue") return "pursue-now";
-  if (mode === "strong") return "strong";
-  return "all";
+  let scope = "all";
+  if (mode === "strong") scope = "evaluate-soon";
+  const j = filterState.jurisdiction;
+  if (j === "UK") return `${scope} · UK`;
+  if (j === "Mauritius") return `${scope} · Mauritius`;
+  return scope;
 }
 
 function updateExportButtonLabel() {
@@ -211,14 +227,26 @@ function formatRefreshed(iso) {
   }
 }
 
-function reviewHighPriorityLeads() {
-  applyViewMode("pursue");
+function scrollToLeadQueue() {
   const n = getFilteredLeads().length;
-  if (!n) showToast("No pursue-now leads in this snapshot", true);
+  if (!n) showToast("No leads in this snapshot", true);
   document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function formatDisplayDate(iso) {
+  try {
+    return new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDisplayDateShort(iso) {
   try {
     return new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
       day: "numeric",
@@ -227,6 +255,127 @@ function formatDisplayDate(iso) {
     });
   } catch {
     return iso;
+  }
+}
+
+function countPriorityBuckets(rows) {
+  let high = 0;
+  let evaluate = 0;
+  let monitor = 0;
+  for (const r of rows) {
+    const score = Number(r.score) || 0;
+    if (score >= SCORE_TIERS.high) high += 1;
+    else if (score >= SCORE_TIERS.strong) evaluate += 1;
+    else monitor += 1;
+  }
+  return { high, evaluate, monitor, total: rows.length };
+}
+
+function buildConicGradient(segments) {
+  const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+  if (!total) return "conic-gradient(#e8ecf3 0deg 360deg)";
+  let acc = 0;
+  const parts = [];
+  for (const seg of segments) {
+    if (!seg.value) continue;
+    const start = (acc / total) * 360;
+    acc += seg.value;
+    const end = (acc / total) * 360;
+    parts.push(`${seg.color} ${start}deg ${end}deg`);
+  }
+  return `conic-gradient(${parts.join(", ")})`;
+}
+
+function renderChartCard(title, segments, ariaSummary) {
+  const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+  const gradient = buildConicGradient(segments);
+  const legend = segments
+    .map((seg) => {
+      const pct = total ? Math.round((seg.value / total) * 100) : 0;
+      return `<li class="hero-chart-legend__item">
+        <span class="hero-chart-legend__swatch" style="background:${seg.color}"></span>
+        <span class="hero-chart-legend__label">${escapeHtml(seg.label)}</span>
+        <span class="hero-chart-legend__count">${seg.value}</span>
+        <span class="hero-chart-legend__pct">${pct}%</span>
+      </li>`;
+    })
+    .join("");
+  return `
+    <article class="hero-chart-card">
+      <h3 class="hero-chart-card__title">${escapeHtml(title)}</h3>
+      <div class="hero-chart-card__body">
+        <div class="hero-donut" style="background:${gradient}" role="img" aria-label="${escapeHtml(ariaSummary || title)}">
+          <span class="hero-donut__center">${total}</span>
+        </div>
+        <ul class="hero-chart-legend">${legend}</ul>
+      </div>
+    </article>`;
+}
+
+function renderHeroAnalytics(statsEl) {
+  if (!statsEl) return;
+  if (!allLeads.length) {
+    statsEl.innerHTML =
+      '<p class="hero-analytics__empty muted">Load a prepared snapshot to see jurisdiction and priority breakdown.</p>';
+    return;
+  }
+  const { uk, mu } = countUkMu(allLeads);
+  const buckets = countPriorityBuckets(allLeads);
+  const jurisdictionSummary = `United Kingdom ${uk}, Mauritius ${mu}, ${uk + mu} total`;
+  const prioritySummary = `High priority ${buckets.high}, evaluate soon ${buckets.evaluate}, monitor ${buckets.monitor}`;
+  statsEl.innerHTML = `
+    <div class="hero-analytics__grid">
+      ${renderChartCard(
+        "By jurisdiction",
+        [
+          { label: "United Kingdom", value: uk, color: "#1a3560" },
+          { label: "Mauritius", value: mu, color: "#3d6ea8" },
+        ],
+        jurisdictionSummary
+      )}
+      ${renderChartCard(
+        "By review priority",
+        [
+          { label: "High priority (70+)", value: buckets.high, color: "#0d7a52" },
+          { label: "Evaluate soon", value: buckets.evaluate, color: "#c9a84c" },
+          { label: "Monitor", value: buckets.monitor, color: "#c5ced9" },
+        ],
+        prioritySummary
+      )}
+    </div>`;
+}
+
+function updateHeroMetaLine() {
+  const metaEl = $("#queueHeroMeta");
+  if (!metaEl) return;
+  const total = allLeads.length;
+  if (!total) {
+    metaEl.hidden = true;
+    metaEl.textContent = "";
+    return;
+  }
+  const visible = getFilteredLeads().length;
+  const mode = VIEW_MODES[filterState.viewMode]?.label || "View";
+  if (visible === total) {
+    metaEl.textContent = `${total} companies in this snapshot · ${mode}`;
+  } else {
+    metaEl.textContent = `Showing ${visible} of ${total} companies in the table · ${mode}`;
+  }
+  metaEl.hidden = false;
+}
+
+function updateTablePanelSubtitle() {
+  const total = allLeads.length;
+  if (!total) {
+    setPanelSubtitle("");
+    return;
+  }
+  const visible = getFilteredLeads().length;
+  const dateLabel = formatDisplayDateShort(getCurrentDate());
+  if (visible === total) {
+    setPanelSubtitle(`${total} companies · snapshot ${dateLabel}`);
+  } else {
+    setPanelSubtitle(`${visible} of ${total} companies shown · snapshot ${dateLabel}`);
   }
 }
 
@@ -448,43 +597,13 @@ function syncSnapshotControls() {
   }
 }
 
-function renderHeroTierStats(statsEl, tierRows) {
-  if (!statsEl) return;
-  const tiers = countTiersFromRows(tierRows);
-  statsEl.innerHTML = `
-    <p class="decision-metric decision-metric--pursue">
-      <span class="decision-metric__value">${tiers.pursue}</span>
-      <span class="decision-metric__label">pursue-now leads</span>
-    </p>
-    <p class="decision-metric decision-metric--strong">
-      <span class="decision-metric__value">${tiers.month}</span>
-      <span class="decision-metric__label">strong leads</span>
-    </p>
-  `;
-}
-
-function heroTierRows(payload, rowsForTiers) {
-  if (rowsForTiers !== undefined) return rowsForTiers;
-  const activeDate = payload?.incorporation_date || getCurrentDate();
-  if (
-    !allLeads.length ||
-    !lastPayload?.incorporation_date ||
-    lastPayload.incorporation_date !== activeDate ||
-    activeDate !== getCurrentDate()
-  ) {
-    return [];
-  }
-  return allLeads;
-}
-
-function renderQueueHero(payload, rowsForTiers) {
+function renderQueueHero(payload) {
   const dateEl = $("#queueHeroDate");
   const refreshedEl = $("#queueHeroRefreshed");
   const statsEl = $("#queueHeroStats");
   if (!dateEl) return;
 
   const d = payload?.incorporation_date || getCurrentDate();
-  const tierRows = heroTierRows(payload, rowsForTiers);
 
   if (!d) {
     dateEl.textContent = appHasDates ? "Choose a snapshot date" : "No snapshot loaded yet";
@@ -495,44 +614,49 @@ function renderQueueHero(payload, rowsForTiers) {
           ? "Choose a snapshot date — contact operations if data is missing"
           : "Run the daily pipeline or refresh register data in Settings";
     }
-    renderHeroTierStats(statsEl, []);
+    if (statsEl) {
+      statsEl.innerHTML =
+        '<p class="hero-analytics__empty muted">Pick a snapshot date to load the queue.</p>';
+    }
+    updateHeroMetaLine();
     return;
   }
 
   dateEl.textContent = formatDisplayDate(d);
-  renderHeroTierStats(statsEl, tierRows);
-  const mixEl = $("#queueHeroMix");
-  if (mixEl) {
-    const counts =
-      lastPayload?.incorporation_date === d && lastPayload?.metrics
-        ? lastPayload.metrics
-        : null;
-    const ukN = counts ? counts.uk_count ?? 0 : countUkMu(tierRows).uk;
-    const muN = counts ? counts.mauritius_count ?? 0 : countUkMu(tierRows).mu;
-    if (ukN > 0 || muN > 0) {
-      mixEl.hidden = false;
-      mixEl.textContent = `${ukN} UK · ${muN} Mauritius`;
+  renderHeroAnalytics(statsEl);
+  updateHeroMetaLine();
+  if (refreshedEl) {
+    const buckets = allLeads.length ? countPriorityBuckets(allLeads) : null;
+    const refreshed = payload?.last_refreshed
+      ? formatRefreshedShort(payload.last_refreshed)
+      : "";
+    if (buckets && refreshed) {
+      refreshedEl.textContent = `${refreshed} · ${buckets.high} high · ${buckets.evaluate} evaluate · ${buckets.monitor} monitor`;
+    } else if (buckets) {
+      refreshedEl.textContent = `${buckets.high} high priority · ${buckets.evaluate} evaluate soon · ${buckets.monitor} monitor · sorted by score`;
     } else {
-      mixEl.hidden = true;
-      mixEl.textContent = "";
+      refreshedEl.textContent = refreshed || "Sorted by opportunity score";
     }
   }
-  if (refreshedEl) {
-    refreshedEl.textContent = payload?.last_refreshed
-      ? formatRefreshedShort(payload.last_refreshed)
-      : "Sorted by opportunity score";
-  }
   syncSnapshotControls();
+}
+
+function jurisdictionGuidancePhrase() {
+  const j = filterState.jurisdiction;
+  if (j === "UK") return " · United Kingdom only";
+  if (j === "Mauritius") return " · Mauritius only";
+  return "";
 }
 
 function updateTabGuidance() {
   const el = $("#tabGuidance");
   if (!el) return;
   const n = getFilteredLeads().length;
-  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.pursue;
+  const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.all;
   const min = mode.minScore;
   const modePhrase =
-    filterState.viewMode === "pursue" ? "pursue-now" : mode.label.toLowerCase();
+    filterState.viewMode === "strong" ? "evaluate-soon queue" : "all leads";
+  const jPhrase = jurisdictionGuidancePhrase();
   const search = filterState.search.trim();
   if (!allLeads.length) {
     el.textContent = "";
@@ -540,13 +664,14 @@ function updateTabGuidance() {
   }
   if (n === 0) {
     el.textContent = search
-      ? `No ${modePhrase} leads match “${search}” — try Strong or All.`
-      : `No leads in ${modePhrase} view (score ≥${min}) — try Strong or All.`;
+      ? `No ${modePhrase} leads match “${search}”${jPhrase} — try All Leads.`
+      : `No leads in ${modePhrase} (score ≥${min})${jPhrase} — try All Leads.`;
     return;
   }
+  const scoreNote = filterState.viewMode === "all" ? "all scores" : `score ≥${min}`;
   el.textContent = search
-    ? `Showing ${n} ${modePhrase} leads matching “${search}” (score ≥${min})`
-    : `Showing ${n} ${modePhrase} leads (score ≥${min}) · sorted by score`;
+    ? `Showing ${n} ${modePhrase} matching “${search}” (${scoreNote})${jPhrase}`
+    : `Showing ${n} in ${modePhrase} (${scoreNote})${jPhrase} · sorted by score`;
 }
 
 function updateDateNavButtons() {
@@ -578,6 +703,9 @@ function setSelectedDate(date) {
   if ($("#dateSelect") && !$("#dateSelect").hidden) {
     $("#dateSelect").value = date;
   }
+  filterState.search = "";
+  const searchEl = $("#filterSearch");
+  if (searchEl) searchEl.value = "";
   allLeads = [];
   lastPayload = null;
   hideQueueLoadError();
@@ -627,7 +755,7 @@ function setPanelSubtitle(text) {
 }
 
 function renderQueueZeroState() {
-  renderQueueHero({ incorporation_date: getCurrentDate() || null }, []);
+  renderQueueHero({ incorporation_date: getCurrentDate() || null });
   setPanelSubtitle(appHasDates ? "" : "No snapshot data in this environment");
   updateTabGuidance();
 }
@@ -652,20 +780,19 @@ function renderQueueFromFiltered() {
   if (!lastPayload) return;
   const filtered = getFilteredLeads();
   const { uk, mu } = countUkMu(filtered);
-  renderQueueHero(
-    {
-      ...lastPayload,
-      metrics: {
-        total_leads: filtered.length,
-        high_priority: filtered.filter((l) => (Number(l.score) || 0) >= 70).length,
-        assigned_count: filtered.filter((l) => (l.assigned_to || "").trim()).length,
-        unassigned_count: filtered.filter((l) => !(l.assigned_to || "").trim()).length,
-        uk_count: uk,
-        mauritius_count: mu,
-      },
+  renderQueueHero({
+    ...lastPayload,
+    metrics: {
+      total_leads: filtered.length,
+        high_priority: filtered.filter((l) => (Number(l.score) || 0) >= SCORE_TIERS.high).length,
+      assigned_count: filtered.filter((l) => (l.assigned_to || "").trim()).length,
+      unassigned_count: filtered.filter((l) => !(l.assigned_to || "").trim()).length,
+      uk_count: uk,
+      mauritius_count: mu,
     },
-    filtered
-  );
+  });
+  updateHeroMetaLine();
+  updateTablePanelSubtitle();
 }
 
 function renderMetricsFromFiltered() {
@@ -763,9 +890,10 @@ function renderTrustStrip(statusData) {
   const mu = statusData?.mauritius || {};
   const ukCount = loaded?.metrics?.uk_count ?? uk.row_count ?? 0;
   const muCount = loaded?.metrics?.mauritius_count ?? mu.row_count ?? 0;
-  const inView = loaded?.count ?? (allLeads.length || ukCount + muCount);
+  const filtered = allLeads.length ? getFilteredLeads() : [];
+  const inView = filtered.length || loaded?.count || 0;
+  const filterNote = activeFilterSummary();
   const generatedIso = uk.file_modified || mu.file_modified;
-  const snapshotFile = date ? `exports/${date}.csv` : "—";
 
   let health = "healthy";
   let healthLabel = "Healthy";
@@ -803,8 +931,20 @@ function renderTrustStrip(statusData) {
     <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item">Mauritius: <strong>Updated ${formatTrustUtc(mu.file_modified)}</strong> · ${muCount} leads</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
-    <span class="trust-strip__item">Queue: <span class="trust-strip__health trust-strip__health--${health}">${healthLabel}</span>${inView ? ` · ${inView} in view` : ""}</span>
+    <span class="trust-strip__item">Queue: <span class="trust-strip__health trust-strip__health--${health}">${healthLabel}</span>${inView ? ` · ${inView} in view` : ""}${filterNote ? ` · ${escapeHtml(filterNote)}` : ""}</span>
   `;
+}
+
+function activeFilterSummary() {
+  if (!allLeads.length) return "";
+  const parts = [];
+  const mode = VIEW_MODES[filterState.viewMode];
+  if (mode?.label) parts.push(mode.label);
+  if (filterState.jurisdiction === "UK") parts.push("United Kingdom only");
+  if (filterState.jurisdiction === "Mauritius") parts.push("Mauritius only");
+  const q = filterState.search.trim();
+  if (q) parts.push(`search “${q}”`);
+  return parts.join(" · ");
 }
 
 function hideQueueLoadError() {
@@ -839,7 +979,10 @@ function renderTableStateCell(title, text, actionsHtml = "") {
 }
 
 function showTableLoadingState() {
-  renderTableStateCell("Loading queue…", "Fetching incorporation snapshot for the selected date.");
+  renderTableStateCell(
+    "Loading incorporation records…",
+    "Retrieving prepared snapshot for the selected date."
+  );
 }
 
 function showTableQuietDayState() {
@@ -890,7 +1033,7 @@ function showTableEmptyState() {
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state">
       <span class="table-empty-state__mark" aria-hidden="true">A</span>
-      <p class="brand-eyebrow table-empty-state__eyebrow">Arie Finance</p>
+      <p class="brand-eyebrow table-empty-state__eyebrow">Corporate Leads Intelligence</p>
       <h3 class="table-empty-state__title">${title}</h3>
       <p class="table-empty-state__text">${text}</p>
       <div class="table-empty-state__actions">
@@ -979,8 +1122,8 @@ async function fetchDataStatus() {
 
 function tierFromScore(score) {
   const s = Number(score) || 0;
-  if (s >= SCORE_TIERS.pursue) return { key: "a", label: "Pursue now" };
-  if (s >= SCORE_TIERS.strong) return { key: "b", label: "This month" };
+  if (s >= SCORE_TIERS.high) return { key: "a", label: "High priority" };
+  if (s >= SCORE_TIERS.strong) return { key: "b", label: "Evaluate soon" };
   return { key: "c", label: "Monitor" };
 }
 
@@ -1028,36 +1171,131 @@ function scoreWithBar(score) {
   </span>`;
 }
 
+function formatEntityTypeLabel(raw, jurisdiction) {
+  const e = (raw || "").trim();
+  if (!e) return jurisdiction === "Mauritius" ? "Company" : "Private Limited Company";
+  const key = e.toUpperCase().replace(/\./g, "");
+  const map = {
+    LTD: "Private Limited Company",
+    PLC: "Public Limited Company",
+    LLP: "Limited Liability Partnership",
+    "GLOBAL BUSINESS COMPANY": "Global Business Company",
+    GBC: "Global Business Company",
+    "AUTHORISED COMPANY": "Authorised Company",
+    AC: "Authorised Company",
+    "PRIVATE LIMITED COMPANY": "Private Limited Company",
+  };
+  if (map[key]) return map[key];
+  if (e === e.toUpperCase() && e.length > 3) {
+    return e
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  return e.charAt(0).toUpperCase() + e.slice(1);
+}
+
+function companyMetaLine(lead) {
+  const j = (lead.jurisdiction || "").trim();
+  const entity = formatEntityTypeLabel(lead.entity_type, j);
+  if (j === "UK") return `United Kingdom · ${entity}`;
+  if (j === "Mauritius") return `Mauritius · ${entity}`;
+  return entity;
+}
+
+function displayCompanyName(name) {
+  const raw = (name || "").trim();
+  if (!raw) return "—";
+  const trimmed = raw.replace(
+    /\s+(ltd|limited|plc|llp|gbc|global business company|authorised company)\.?$/i,
+    ""
+  ).trim();
+  return trimmed || raw;
+}
+
+function formatSicBullet(lead) {
+  if (isMauritiusLead(lead)) return "";
+  const sic = (lead.sic_codes || "").trim();
+  if (!sic || sic === "—") return "";
+  const code = sic.split(",")[0].trim();
+  return `SIC ${code} on registry`;
+}
+
+function intelligenceTableBullets(lead) {
+  const server = lead.table_intelligence_bullets;
+  if (Array.isArray(server) && server.length) return server.slice(0, 3);
+  const bullets = [];
+  const sic = formatSicBullet(lead);
+  if (sic) bullets.push(sic);
+  for (const s of (lead.intelligence_signals || []).slice(0, 3)) {
+    if (s && !bullets.includes(s)) bullets.push(s);
+  }
+  if (bullets.length < 3) {
+    for (const f of lead.registry_facts || []) {
+      if (bullets.length >= 3) break;
+      if (f.startsWith("Incorporated") && !bullets.some((b) => b.includes("Incorporated"))) {
+        bullets.push(f.replace(" (registry date)", ""));
+      }
+    }
+  }
+  return bullets.slice(0, 3);
+}
+
+function intelligenceNarrative(lead) {
+  const raw = (
+    lead.intelligence_summary ||
+    lead.prospect_reason ||
+    lead.why_summary ||
+    ""
+  ).trim();
+  if (raw.includes(" · ") && /priority outreach|worth a call/i.test(raw)) {
+    const facts = (lead.registry_facts || []).filter(Boolean);
+    if (facts.length) return facts.slice(0, 2).join(". ") + (facts.length ? "." : "");
+    return companyMetaLine(lead);
+  }
+  return raw;
+}
+
+function strategicHint(lead) {
+  return (lead.strategic_hint || "").trim();
+}
+
 function jurisdictionPill(lead) {
   const j = (lead.jurisdiction || "").trim();
   if (!j) return "";
   const key = j === "Mauritius" ? "mu" : "uk";
-  return `<span class="jurisdiction-pill jurisdiction-pill--${key}">${escapeHtml(j)}</span>`;
+  const short = j === "Mauritius" ? "MU" : "UK";
+  return `<span class="jurisdiction-pill jurisdiction-pill--${key}" title="${escapeHtml(j)}">${short}</span>`;
+}
+
+function tableInterpretationLine(lead) {
+  const relevance = (lead.arie_relevance || []).filter(Boolean);
+  if (relevance.length) return relevance[0];
+  const signals = (lead.intelligence_signals || []).filter(Boolean);
+  if (signals.length) return signals[0];
+  return strategicHint(lead) || "";
 }
 
 function companyCell(lead) {
-  const entity = (lead.entity_type || "").trim();
+  const fullName = (lead.company_name || "").trim();
+  const displayName = displayCompanyName(fullName);
   return `<div class="company-cell">
     <div class="company-cell__head">
-      <span class="company-name">${escapeHtml(lead.company_name)}</span>
-      ${jurisdictionPill(lead)}
+      <span class="company-name" title="${escapeHtml(fullName)}">${escapeHtml(displayName)}</span>
     </div>
-    ${entity ? `<span class="company-sub">${escapeHtml(entity)}</span>` : ""}
+    <span class="company-sub">${escapeHtml(companyMetaLine(lead))}</span>
   </div>`;
 }
 
 function whyContactCell(lead) {
-  const reason = (lead.prospect_reason || lead.why_summary || "").trim();
-  if (!reason) return `<span class="why-contact-empty">—</span>`;
-  const short = reason.length > 110 ? `${reason.slice(0, 107)}…` : reason;
-  const tags = (lead.why_tags || [])
-    .slice(0, 2)
-    .map((t) => `<span class="why-tag why-tag--inline">${escapeHtml(t)}</span>`)
-    .join("");
-  return `<div class="why-contact-snippet">
-    <p class="why-contact-snippet__text">${escapeHtml(short)}</p>
-    ${tags ? `<div class="why-contact-snippet__tags">${tags}</div>` : ""}
-  </div>`;
+  const bullets = intelligenceTableBullets(lead);
+  if (!bullets.length) {
+    return `<span class="intel-empty muted">Registry profile only</span>`;
+  }
+  return `<ul class="intel-bullets">${bullets
+    .map((b) => `<li>${escapeHtml(b)}</li>`)
+    .join("")}</ul>`;
 }
 
 function priorityText(priority) {
@@ -1077,14 +1315,21 @@ function resetFilters() {
   commitFilterState();
 }
 
+function passesViewMode(lead) {
+  const score = Number(lead.score) || 0;
+  const mode = filterState.viewMode;
+  if (mode === "all") return true;
+  if (score < filterState.minScore) return false;
+  return true;
+}
+
 function getFilteredLeads() {
   const q = filterState.search.toLowerCase();
-  const minScore = filterState.minScore;
   const { priority, assigned, jurisdiction } = filterState;
 
   return allLeads.filter((l) => {
     if (q && !(l.company_name || "").toLowerCase().includes(q)) return false;
-    if (minScore > 0 && (Number(l.score) || 0) < minScore) return false;
+    if (!passesViewMode(l)) return false;
     if (priority && l.priority !== priority) return false;
     if (assigned === "__unassigned__" && (l.assigned_to || "").trim()) return false;
     if (assigned && assigned !== "__unassigned__" && l.assigned_to !== assigned) return false;
@@ -1132,8 +1377,7 @@ function suggestedOwnerDisplayName(lead) {
 
 function suggestedOwnerCell(lead) {
   const name = suggestedOwnerDisplayName(lead);
-  return `<span class="owner-suggestion" title="Suggested for triage — not saved as an assignment yet">
-    <span class="owner-suggestion__label">Suggested:</span>
+  return `<span class="owner-suggestion" title="Recommended coverage for triage — not saved as an assignment yet">
     <span class="owner-suggestion__name">${escapeHtml(name)}</span>
   </span>`;
 }
@@ -1150,28 +1394,45 @@ function assignedOptions(lead, selected) {
     .join("");
 }
 
+function renderTrustList(items, emptyText) {
+  if (!items?.length) {
+    return `<p class="trust-layer__empty muted">${escapeHtml(emptyText)}</p>`;
+  }
+  return `<ul class="trust-layer__list">${items
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("")}</ul>`;
+}
+
 function renderWhyContactHtml(lead) {
-  const reason = (lead.prospect_reason || lead.why_summary || "").trim();
-  const tags = (lead.why_tags || [])
-    .map((t) => `<span class="why-tag">${escapeHtml(t)}</span>`)
-    .join("");
-  const strengths = (lead.strengths || [])
-    .slice(0, 4)
-    .map((s) => `<li>${escapeHtml(s)}</li>`)
-    .join("");
+  const facts = lead.registry_facts || [];
+  const signals = lead.intelligence_signals || [];
+  const relevance = lead.arie_relevance || [];
+  const cautions = (lead.cautions || []).slice(0, 4);
 
   return `
-    <section class="intel-section why-contact-section why-contact-section--featured">
-      <h3>Why contact</h3>
-      <div class="why-contact-card">
-      <p class="why-contact-lead">${escapeHtml(reason || "Review registry profile for fit.")}</p>
-      ${tags ? `<div class="why-tags">${tags}</div>` : ""}
+    <section class="intel-section trust-intel why-contact-section why-contact-section--featured">
+      <h3>Intelligence</h3>
+      <p class="trust-intel__intro muted">Registry facts are shown as recorded. Indicators and relevance lines are heuristic — verify on the source register.</p>
+      <div class="trust-layer trust-layer--fact">
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--high">Registry facts</span></h4>
+        ${renderTrustList(facts, "No structured registry facts available for this row.")}
+      </div>
+      <div class="trust-layer trust-layer--signal">
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--medium">Intelligence signals</span></h4>
+        ${renderTrustList(signals, "No name/SIC/age heuristics triggered beyond base registry data.")}
+      </div>
+      <div class="trust-layer trust-layer--interpret">
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--low">Why this may matter to ARIE</span></h4>
+        ${renderTrustList(relevance, "No commercial interpretation generated — use registry facts and score breakdown only.")}
+      </div>
       ${
-        strengths
-          ? `<ul class="why-contact-strengths">${strengths}</ul>`
+        cautions.length
+          ? `<div class="trust-layer trust-layer--caution">
+        <h4 class="trust-layer__title">Review points</h4>
+        <ul class="trust-layer__list">${cautions.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>
+      </div>`
           : ""
       }
-      </div>
     </section>`;
 }
 
@@ -1201,9 +1462,9 @@ function renderScoreBreakdownHtml(lead) {
 
   return `
     <section class="intel-section score-explainer">
-      <h3>Why this score? <span class="score-explainer__total">${escapeHtml(String(bd.total))}</span></h3>
-      <p class="score-explainer__summary">${escapeHtml(bd.summary || "")}</p>
-      <p class="score-explainer__priority">Tier: <strong>${escapeHtml(tierFromScore(lead.score).label)}</strong> (Pursue now ≥ ${SCORE_TIERS.pursue} · This month ≥ ${SCORE_TIERS.strong})</p>
+      <h3>Score breakdown <span class="score-explainer__total">${escapeHtml(String(bd.total))}</span></h3>
+      <p class="score-explainer__summary muted">${escapeHtml(bd.summary || "")}</p>
+      <p class="score-explainer__priority">Score band: <strong>${escapeHtml(tierFromScore(lead.score).label)}</strong> (High priority ≥ ${SCORE_TIERS.high} · Evaluate soon ≥ ${SCORE_TIERS.strong})</p>
       <ul class="score-components">${bars}</ul>
     </section>`;
 }
@@ -1212,34 +1473,13 @@ function renderClassificationHtml(lead) {
   const leadType = (lead.lead_type || "direct").toLowerCase();
   const typeNote =
     leadType === "introducer"
-      ? "Name suggests a professional / fiduciary firm — still in the main queue; tag introducer relationships manually if relevant."
-      : "Onboarding candidate from registry data.";
-
-  const tags = (lead.why_tags || []).map((t) => `<span class="why-tag">${escapeHtml(t)}</span>`).join("");
-  const strengths = (lead.strengths || [])
-    .slice(0, 4)
-    .map((s) => `<li>${escapeHtml(s)}</li>`)
-    .join("");
-  const cautions = (lead.cautions || [])
-    .slice(0, 3)
-    .map((c) => `<li>${escapeHtml(c)}</li>`)
-    .join("");
+      ? "Name pattern may match a professional / fiduciary firm — confirm direct client vs introducer manually."
+      : "Classified as a direct onboarding candidate from registry data (rule-based).";
 
   return `
     <section class="intel-section classification-explainer">
-      <h3>Classification</h3>
-      <p class="classification-explainer__reason">${escapeHtml(lead.lead_type_reason || typeNote)}</p>
-      ${tags ? `<div class="why-tags">${tags}</div>` : ""}
-      ${
-        strengths
-          ? `<div class="signal-block signal-block--strength"><h4>Strengths</h4><ul>${strengths}</ul></div>`
-          : ""
-      }
-      ${
-        cautions
-          ? `<div class="signal-block signal-block--caution"><h4>Review points</h4><ul>${cautions}</ul></div>`
-          : ""
-      }
+      <h3>Classification logic</h3>
+      <p class="classification-explainer__reason muted">${escapeHtml(lead.lead_type_reason || typeNote)}</p>
     </section>`;
 }
 
@@ -1271,6 +1511,7 @@ function renderTable() {
   if (!filtered.length) {
     showFilteredEmptyState(allLeads.length > 0);
     updateExportButtonLabel();
+    updateTablePanelSubtitle();
     return;
   }
 
@@ -1281,12 +1522,12 @@ function renderTable() {
       const selected = openLeadId === lid ? " selected" : "";
       const label = escapeHtml(lead.company_name || "Company");
       return `
-        <tr class="lead-row lead-row--tier-${tierKey}${selected}" data-lead-id="${escapeHtml(lid)}" role="button" tabindex="0" aria-label="Open ${label} lead profile">
+        <tr class="lead-row lead-row--tier-${tierKey}${selected}" data-lead-id="${escapeHtml(lid)}" role="button" tabindex="0" aria-label="Review ${label}">
           <td>${companyCell(lead)}</td>
           <td>${scoreDecisionCell(lead.score)}</td>
           <td class="prospect-reason-cell">${whyContactCell(lead)}</td>
           <td class="assign-cell">${suggestedOwnerCell(lead)}</td>
-          <td class="col-chevron"><span class="row-open-label">Open</span><span class="row-chevron" aria-hidden="true">›</span></td>
+          <td class="col-chevron"><span class="row-open-label">Review</span></td>
         </tr>`;
     })
     .join("");
@@ -1309,6 +1550,7 @@ function renderTable() {
   updateSortHeaders();
   updateTableScrollHint();
   updateExportButtonLabel();
+  updateTablePanelSubtitle();
 }
 
 function showFilteredEmptyState(hasLeadsInSnapshot) {
@@ -1322,20 +1564,16 @@ function showFilteredEmptyState(hasLeadsInSnapshot) {
       <h3 class="table-empty-state__title">${escapeHtml(
         filterState.search.trim()
           ? "No leads match your search"
-          : filterState.viewMode === "pursue"
-            ? "No pursue-now leads for this snapshot"
-            : filterState.viewMode === "strong"
+          : filterState.viewMode === "strong"
               ? "No strong leads for this snapshot"
               : "No leads match current filters"
       )}</h3>
       <p class="table-empty-state__text">${escapeHtml(
         filterState.search.trim()
-          ? `Nothing matches “${filterState.search.trim()}”. Try another term or switch to All view.`
-          : filterState.viewMode === "pursue"
-            ? "Try Strong or All to see more of the queue, or pick another prepared date."
-            : filterState.viewMode === "strong"
-              ? "Try All view to see the full queue for this date."
-              : "Try Strong or All, or clear your search."
+          ? `Nothing matches “${filterState.search.trim()}”. Try another term or switch to All Leads.`
+          : filterState.viewMode === "strong"
+            ? "Try All Leads to see the full queue for this date."
+            : "Try Evaluate Soon or clear your search."
       )}</p>
       <button type="button" class="btn btn-secondary" id="emptyViewAll">Show all leads</button>
     </div>
@@ -1436,7 +1674,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     return;
   }
   hideQueueLoadError();
-  setLoading(true, refresh ? "Loading UK register data…" : "Loading queue…");
+  setLoading(true, refresh ? "Retrieving UK register data…" : "Loading incorporation records…");
   showTableLoadingState();
   const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
@@ -1532,15 +1770,22 @@ function exportCsv() {
     "entity_type",
     "score",
     "priority",
+    "strategic_hint",
+    "intelligence_summary",
+    "registry_facts",
+    "intelligence_signals",
+    "arie_relevance",
     "prospect_reason",
-    "why_summary",
     "incorporation_date",
     "assigned_to",
     "notes",
     "lead_id",
     "source",
   ];
-  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const esc = (v) => {
+    const raw = Array.isArray(v) ? v.join(" | ") : v;
+    return `"${String(raw ?? "").replace(/"/g, '""')}"`;
+  };
   const lines = [headers.join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))];
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
@@ -1640,11 +1885,11 @@ function renderDetailShell(lead) {
   $("#detailBody").innerHTML = `
     <section class="intel-section detail-company-header">
       <h3 class="detail-company-title">${escapeHtml(lead.company_name)}</h3>
-      <p id="detailSummary" class="detail-summary muted">${escapeHtml(lead.jurisdiction || "—")} · Score ${Number(lead.score) || 0}</p>
+      <p id="detailSummary" class="detail-summary muted">${escapeHtml(companyMetaLine(lead))} · Rule-based score ${Number(lead.score) || 0}</p>
       <div class="lead-card-meta">
         ${tierBadge(lead.score)}
         <span class="jurisdiction-badge">${escapeHtml(lead.jurisdiction || "—")}</span>
-        <span class="entity-badge">${escapeHtml(lead.entity_type || "—")}</span>
+        <span class="entity-badge">${escapeHtml(formatEntityTypeLabel(lead.entity_type, lead.jurisdiction))}</span>
         ${scoreWithBar(lead.score)}
       </div>
       <p class="detail-meta-line"><strong>Incorporated:</strong> ${escapeHtml(lead.incorporation_date || "—")}</p>
@@ -1662,18 +1907,18 @@ function renderDetailShell(lead) {
 
     <section class="intel-section" id="detailOfficersSection">
       <h3>Directors &amp; Officers</h3>
-      <p class="muted">Loading…</p>
+      <p class="muted">Retrieving registry officers…</p>
     </section>
 
     <section class="intel-section" id="detailPscSection">
       <h3>Persons with Significant Control</h3>
-      <p class="muted">Loading…</p>
+      <p class="muted">Retrieving PSC records…</p>
     </section>
 
     <section class="intel-section">
       <h3>Notes &amp; status</h3>
       <div class="detail-field">
-        <span class="detail-field__label">Suggested owner</span>
+        <span class="detail-field__label">Recommended RM</span>
         ${suggestedOwnerCell(lead)}
         <p class="owner-suggestion__note">For triage only — not saved as an assignment until claim is available.</p>
       </div>
@@ -1733,8 +1978,8 @@ async function loadDetailPeople(lead, options = {}) {
     return;
   }
 
-  officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Loading…</p>`;
-  pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Loading…</p>`;
+  officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Retrieving registry officers…</p>`;
+  pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Retrieving PSC records…</p>`;
 
   try {
     const refreshParam = refresh ? "&refresh=true" : "";
@@ -1874,8 +2119,33 @@ function showBriefContent(brief) {
   out.innerHTML = hook ? `<p class="brief-hook">${escapeHtml(hook)}</p><p>${escapeHtml(body)}</p>` : `<p>${escapeHtml(body)}</p>`;
 }
 
+function applyEnvBadgeFallback() {
+  const el = $("#envBadge");
+  if (!el) return;
+  const raw = (el.textContent || "").trim();
+  if (!raw.includes("{{ENV_BADGE")) return;
+  el.textContent = "LOCAL PREVIEW";
+  el.classList.remove("env-badge--live");
+  el.classList.add("env-badge--dev");
+}
+
+function showWrongOpenModeBanner() {
+  if (window.__arieWrongOpenWarned) return;
+  const badge = $("#envBadge");
+  if (!badge?.textContent.includes("{{ENV_BADGE")) return;
+  window.__arieWrongOpenWarned = true;
+  const banner = document.createElement("div");
+  banner.className = "queue-error-banner";
+  banner.setAttribute("role", "alert");
+  banner.innerHTML =
+    "<p><strong>Open the app through the server.</strong> In your browser go to <code>http://127.0.0.1:8080</code> (not the HTML file directly). The queue cannot load otherwise.</p>";
+  document.querySelector(".trust-strip")?.after(banner);
+}
+
 function init() {
-  $("#reviewHighPriorityBtn")?.addEventListener("click", reviewHighPriorityLeads);
+  applyEnvBadgeFallback();
+  showWrongOpenModeBanner();
+  $("#reviewHighPriorityBtn")?.addEventListener("click", scrollToLeadQueue);
   $("#refreshBtn")?.addEventListener("click", () => fetchLeads(true));
   $("#demoMode")?.addEventListener("change", async () => {
     const demoBox = $("#demoMode");
@@ -1889,7 +2159,7 @@ function init() {
     }
     fetchLeads(false);
   });
-  $("#exportBtn").addEventListener("click", exportCsv);
+  $("#exportBtn")?.addEventListener("click", exportCsv);
 
   $("#datePrev").addEventListener("click", () => navigateDate(-1));
   $("#dateNext").addEventListener("click", () => navigateDate(1));
@@ -1921,6 +2191,7 @@ function init() {
     btn.addEventListener("click", () => applyViewMode(btn.dataset.view));
   });
   $("#filterSearch")?.addEventListener("input", rerenderFromDom);
+  $("#jurisdictionFilter")?.addEventListener("change", rerenderFromDom);
 
   $$("th.sortable").forEach((th) => {
     th.addEventListener("click", () => {

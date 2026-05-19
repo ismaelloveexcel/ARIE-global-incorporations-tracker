@@ -33,29 +33,29 @@ def compute_signals(
     if isinstance(age_days, str) and age_days.isdigit():
         age_days = int(age_days)
     if isinstance(age_days, int) and age_days <= 7:
-        strengths.append("Recently incorporated — early outreach window")
+        strengths.append(f"Incorporated within 7 days ({age_days} days on registry)")
 
     if is_fintech_payment_lead(name, sic):
-        strengths.append("Payments / fintech or financial-sector signals")
+        strengths.append("Payments/fintech terms or financial-sector SIC present (name/SIC heuristic)")
 
     if _sic_financial(sic):
-        strengths.append("Financial services SIC classification")
+        strengths.append("Financial-services SIC recorded on UK registry")
 
     for pat in _CAPITAL_PATTERNS:
         if re.search(pat, text, re.IGNORECASE):
-            strengths.append("Capital / investment structure in company name")
+            strengths.append("Capital or investment terms present in company name")
             break
 
     for pat in _CROSS_BORDER_PATTERNS:
         if re.search(pat, text, re.IGNORECASE):
-            strengths.append("Cross-border or international wording")
+            strengths.append("Cross-border or international terms present in company name")
             break
 
     if lead_type == "introducer":
-        strengths.append("Management / corporate services — core Arie client segment")
+        strengths.append("Name pattern matches corporate services / management profile")
 
     if float(row.get("score") or 0) >= 70:
-        strengths.append("High internal fit score for Arie onboarding focus")
+        strengths.append("Rule-based fit score ≥70 (deterministic scoring model)")
 
     if not (row.get("website_domain") or "").strip():
         cautions.append("No verified website on file — digital footprint not confirmed")

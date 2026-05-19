@@ -255,43 +255,232 @@ def build_why_tags(
     return out
 
 
+def format_entity_label(entity_type: str, jurisdiction: str = "") -> str:
+    """Human-readable entity type for operators (not raw registry codes)."""
+    raw = (entity_type or "").strip()
+    if not raw:
+        return "Company"
+    key = raw.upper().replace(".", "")
+    labels = {
+        "LTD": "Private Limited Company",
+        "PLC": "Public Limited Company",
+        "LLP": "Limited Liability Partnership",
+        "GLOBAL BUSINESS COMPANY": "Global Business Company",
+        "GBC": "Global Business Company",
+        "AUTHORISED COMPANY": "Authorised Company",
+        "AC": "Authorised Company",
+        "PRIVATE LIMITED COMPANY": "Private Limited Company",
+        "LIMITED": "Limited Company",
+    }
+    if key in labels:
+        return labels[key]
+    if raw.isupper() and len(raw) > 3:
+        return raw.title()
+    return raw[0].upper() + raw[1:] if raw else "Company"
+
+
+def _registry_source_label(row: dict[str, Any]) -> str:
+    source = (row.get("source") or "").strip().lower()
+    jurisdiction = (row.get("jurisdiction") or "").strip()
+    if source == "companies_house" or jurisdiction == "UK":
+        return "Companies House"
+    if source == "mauritius_mns" or jurisdiction == "Mauritius":
+        return "Mauritius MNS registry"
+    return ""
+
+
+def _format_incorporation_fact(row: dict[str, Any]) -> str:
+    label = (row.get("incorporation_age_label") or "").strip()
+    raw = (row.get("incorporation_date") or "").strip()
+    if label:
+        return f"Incorporated {label} (registry date)"
+    if raw:
+        return f"Incorporation date on registry: {raw}"
+    return ""
+
+
+def build_registry_facts(row: dict[str, Any]) -> list[str]:
+    """High-confidence facts from registry fields only."""
+    facts: list[str] = []
+    jurisdiction = (row.get("jurisdiction") or "UK").strip()
+    entity = format_entity_label(row.get("entity_type") or "", jurisdiction)
+    if jurisdiction:
+        facts.append(f"{jurisdiction}: {entity}")
+
+    inc = _format_incorporation_fact(row)
+    if inc:
+        facts.append(inc)
+
+    sic = (row.get("sic_codes") or "").strip()
+    if sic and sic != "—":
+        facts.append(f"SIC / activity codes on registry: {sic}")
+
+    status = (row.get("status") or "").strip()
+    if status:
+        facts.append(f"Internal workflow status: {status}")
+
+    source = _registry_source_label(row)
+    if source:
+        facts.append(f"Source register: {source}")
+
+    return facts
+
+
+def build_intelligence_signals(row: dict[str, Any]) -> list[str]:
+    """Medium-confidence indicators derived from observable registry/name/SIC heuristics."""
+    signals: list[str] = []
+    tags = row.get("why_tags") or []
+    tag_l = " ".join(t.lower() for t in tags)
+
+    if "financial sic" in tag_l:
+        signals.append("SIC classification aligns with financial-services activity (UK registry)")
+    if "payments / fintech" in tag_l or row.get("is_fintech_payment"):
+        signals.append("Company name contains payments or fintech-related terms")
+    if "cross-border" in tag_l:
+        signals.append("Company name contains cross-border or international terms")
+    if "capital / investment" in tag_l:
+        signals.append("Company name contains capital or investment-related terms")
+    if "management / corporate" in tag_l:
+        signals.append("Company name suggests a corporate services / management profile")
+    if "mauritius gbc" in tag_l:
+        signals.append("Mauritius GBC or authorised company entity type on registry")
+
+    age_days = row.get("incorporation_age_days")
+    if isinstance(age_days, int) and age_days <= 14 and not any(
+        s.startswith("Incorporated") for s in signals
+    ):
+        signals.insert(0, f"Incorporated within the last 14 days ({age_days} days on registry)")
+
+    return signals[:6]
+
+
+def build_arie_relevance(row: dict[str, Any]) -> list[str]:
+    """Low-confidence commercial interpretation — hedged, never stated as fact."""
+    points: list[str] = []
+    tags = row.get("why_tags") or []
+    tag_l = " ".join(t.lower() for t in tags)
+    jurisdiction = (row.get("jurisdiction") or "").strip()
+
+    if row.get("is_fintech_payment") or "payments / fintech" in tag_l:
+        points.append(
+            "Structure and classification may indicate future cross-border payment requirements."
+        )
+    if "financial sic" in tag_l:
+        points.append(
+            "Financial-services classification may align with operational banking onboarding review."
+        )
+    if "cross-border" in tag_l or "capital / investment" in tag_l:
+        points.append(
+            "Naming patterns may suggest international trading or investment-related activity."
+        )
+    if jurisdiction == "Mauritius" and (
+        "mauritius gbc" in tag_l or (row.get("entity_type") or "").strip()
+    ):
+        if not any("mauritius" in p.lower() for p in points):
+            points.append(
+                "Mauritius entity profile may involve cross-border corporate servicing needs."
+            )
+    if "management / corporate" in tag_l:
+        points.append(
+            "Profile may reflect corporate services activity — confirm direct client vs introducer."
+        )
+
+    return points[:3]
+
+
+def build_strategic_hint(row: dict[str, Any]) -> str:
+    """Single table-line interpretation; empty when nothing substantive to say."""
+    relevance = build_arie_relevance(row)
+    return relevance[0] if relevance else ""
+
+
+def build_intelligence_summary(row: dict[str, Any]) -> str:
+    """Concise factual summary for the queue table (registry layer only)."""
+    facts = build_registry_facts(row)
+    if not facts:
+        return "Registry profile available — verify on source register."
+    primary = facts[0]
+    inc = next((f for f in facts if f.startswith("Incorporated") or "Incorporation date" in f), "")
+    if inc and inc != primary:
+        return f"{primary}. {inc}."
+    if len(facts) > 1 and facts[1] != inc:
+        return f"{primary}. {facts[1]}."
+    return f"{primary}."
+
+
 def build_why_summary(tags: list[str], company_name: str, lead_type: str) -> str:
-    """One-line business relevance for stakeholders."""
-    if not tags:
-        return f"New incorporation ({company_name}) — review registry profile."
-    joined = "; ".join(tags[:4]).lower()
-    return f"Client prospect: {joined}."
+    """Legacy summary field — aligned with intelligence narrative."""
+    if lead_type == "introducer":
+        return "Corporate services profile — confirm direct client vs introducer."
+    row = {
+        "why_tags": tags,
+        "jurisdiction": "UK",
+        "entity_type": "",
+        "company_name": company_name,
+        "incorporation_age_days": "",
+    }
+    return build_intelligence_summary(row)
 
 
 def build_prospect_reason(row: dict[str, Any]) -> str:
-    """Actionable one-liner for operators — why pursue as an Arie client."""
-    parts: list[str] = []
+    """Operator-facing pursuit narrative (alias of intelligence summary)."""
+    return build_intelligence_summary(row)
+
+
+def _short_signal_for_table(signal: str) -> str:
+    mapping = {
+        "SIC classification aligns with financial-services activity (UK registry)": (
+            "Financial-services SIC on registry"
+        ),
+        "Company name contains payments or fintech-related terms": (
+            "Payments/fintech terms in company name"
+        ),
+        "Company name contains cross-border or international terms": (
+            "Cross-border terms in company name"
+        ),
+        "Company name contains capital or investment-related terms": (
+            "Investment-related terms in company name"
+        ),
+        "Company name suggests a corporate services / management profile": (
+            "Corporate services naming pattern"
+        ),
+        "Mauritius GBC or authorised company entity type on registry": (
+            "Mauritius GBC/AC entity type on registry"
+        ),
+    }
+    for long, short in mapping.items():
+        if signal == long:
+            return short
+    if signal.startswith("Incorporated within the last"):
+        return signal.replace(" days on registry)", " on registry)")
+    return signal
+
+
+def build_table_intelligence_bullets(row: dict[str, Any], max_items: int = 3) -> list[str]:
+    """Compact factual bullets for the table column."""
+    bullets: list[str] = []
     jurisdiction = (row.get("jurisdiction") or "").strip()
     entity = (row.get("entity_type") or "").strip()
-    if jurisdiction:
-        parts.append(f"{jurisdiction}" + (f" {entity}" if entity else ""))
-
-    score = float(row.get("score") or 0)
-    for tag in row.get("why_tags") or []:
-        if tag in ("New incorporation",):
-            continue
-        parts.append(tag.lower())
-        if len(parts) >= 3:
+    if jurisdiction and entity:
+        bullets.append(f"{jurisdiction} · {format_entity_label(entity, jurisdiction)}")
+    sic = (row.get("sic_codes") or "").strip()
+    if sic and sic != "—" and jurisdiction == "UK":
+        code = sic.split(",")[0].strip()
+        bullets.append(f"SIC {code} on registry")
+    for signal in row.get("intelligence_signals") or []:
+        if len(bullets) >= max_items:
             break
-
-    age = (row.get("incorporation_age_label") or "").strip()
-    if age and len(parts) < 4:
-        parts.append(age.lower())
-
-    if score >= 70:
-        parts.append("priority outreach")
-    elif score >= 40:
-        parts.append("worth a call")
-
-    if not parts:
-        return "New incorporation — check registry and business activity."
-    sentence = " · ".join(parts[:5])
-    return sentence[0].upper() + sentence[1:] + "."
+        short = _short_signal_for_table(signal)
+        if short and short not in bullets:
+            bullets.append(short)
+    if len(bullets) < max_items:
+        for fact in row.get("registry_facts") or []:
+            if len(bullets) >= max_items:
+                break
+            if fact.startswith("Incorporated"):
+                bullets.append(fact.replace(" (registry date)", ""))
+                break
+    return bullets[:max_items]
 
 
 def ensure_verify_url(row: dict[str, Any]) -> str:
@@ -359,7 +548,14 @@ def enrich_row(row: dict[str, Any], raw_data: dict[str, Any] | None = None) -> d
     )
     row["why_tags"] = tags
     row["why_summary"] = build_why_summary(tags, row.get("company_name", ""), lead_type)
-    row["prospect_reason"] = build_prospect_reason(row)
+    row["registry_facts"] = build_registry_facts(row)
+    row["intelligence_signals"] = build_intelligence_signals(row)
+    row["arie_relevance"] = build_arie_relevance(row)
+    row["strategic_hint"] = build_strategic_hint(row)
+    row["intelligence_summary"] = build_intelligence_summary(row)
+    row["prospect_reason"] = row["intelligence_summary"]
+
+    row["table_intelligence_bullets"] = build_table_intelligence_bullets(row)
 
     from uk_leads.dashboard import dashboard_tabs_for_lead
     from uk_leads.score_explain import build_score_breakdown

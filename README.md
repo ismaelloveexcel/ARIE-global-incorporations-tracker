@@ -103,8 +103,9 @@ Use **Strong prospects (40+)** (default filter), **Review high priority**, the *
 
 ## Independent review
 
-- **Full production audit (recommended):** [`docs/INDEPENDENT_AUDIT_PROMPT.md`](docs/INDEPENDENT_AUDIT_PROMPT.md) — end-to-end, line-by-line, demo→production, missing data, AI/workarounds.  
-- **Shorter growth review:** [`docs/INDEPENDENT_REVIEW_PROMPT.md`](docs/INDEPENDENT_REVIEW_PROMPT.md).
+- **Claude status review (gaps + lightweight fixes):** [`docs/CLAUDE_STATUS_REVIEW_PROMPT.md`](docs/CLAUDE_STATUS_REVIEW_PROMPT.md)  
+- **Full production audit:** [`docs/INDEPENDENT_AUDIT_PROMPT.md`](docs/INDEPENDENT_AUDIT_PROMPT.md)  
+- **Shorter growth review:** [`docs/INDEPENDENT_REVIEW_PROMPT.md`](docs/INDEPENDENT_REVIEW_PROMPT.md)
 
 ## Legacy
 

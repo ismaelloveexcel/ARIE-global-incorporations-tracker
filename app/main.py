@@ -1,5 +1,5 @@
 """
-Arie Incorporation Monitor — Phase 1 web app.
+Arie Corporate Leads Intelligence — Phase 1 web app.
 
 Run: python -m app.main
 User view: /  (daily incorporation queue)
@@ -62,7 +62,7 @@ _MU_PEOPLE_MESSAGE = (
     "This will be added when MNS API access is confirmed."
 )
 
-app = FastAPI(title="Arie Incorporation Monitor", version="1.0.0")
+app = FastAPI(title="Arie Corporate Leads Intelligence", version="1.0.0")
 
 _OPERATOR_REFRESH_DETAIL = (
     "Live registry refresh is disabled in production. "
