@@ -32,14 +32,14 @@ DEFAULT_CONFIG: dict = {
         "phase_1": [
             {"item": "UK incorporations queue (pipeline export)", "status": "Live", "status_icon": "✅"},
             {"item": "Mauritius GBC/AC queue (pipeline export)", "status": "Live", "status_icon": "✅"},
-            {"item": "Introducer relationships", "status": "Manual", "status_icon": "📋", "notes": "CRM / spreadsheet — not an auto queue"},
+            {"item": "Introducer intelligence queue", "status": "Live", "status_icon": "✅", "notes": "Operator-managed routing in portal"},
         ],
         "phase_2": [
-            {"item": "AI calling agent", "status": "Planned", "status_icon": "📋"},
-            {"item": "Appointment booking", "status": "Planned", "status_icon": "📋"},
+            {"item": "Enhanced provenance controls", "status": "Planned", "status_icon": "📋"},
+            {"item": "Introducer relationship analytics", "status": "Planned", "status_icon": "📋"},
         ],
         "phase_3": [
-            {"item": "Automated email outreach", "status": "Planned", "status_icon": "📋"},
+            {"item": "RM workflow automations", "status": "Planned", "status_icon": "📋"},
             {"item": "Additional jurisdictions", "status": "Planned", "status_icon": "📋"},
         ],
         "phase_4": [

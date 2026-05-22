@@ -15,12 +15,14 @@ def _mu_management_row():
     }
 
 
-def test_introducer_tab_filter_always_empty():
+def test_introducer_tab_filter_returns_introducers():
     rows = [
         _mu_management_row(),
         {"source": "companies_house", "company_name": "Acme Ltd", "entity_type": "ltd"},
     ]
-    assert filter_tab_leads(rows, "introducers") == []
+    intro_rows = filter_tab_leads(rows, "introducers")
+    assert len(intro_rows) == 1
+    assert intro_rows[0]["company_name"] == "Aura Corporate Management Ltd"
 
 
 def test_direct_tab_includes_mu_management_name_once():
@@ -30,8 +32,8 @@ def test_direct_tab_includes_mu_management_name_once():
     assert is_direct_client(rows[0]) is True
 
 
-def test_dashboard_tabs_never_include_introducers():
-    assert dashboard_tabs_for_lead(_mu_management_row()) == ["direct_clients"]
+def test_dashboard_tabs_include_introducers_for_introducer_rows():
+    assert dashboard_tabs_for_lead(_mu_management_row()) == ["direct_clients", "introducers"]
 
 
 def test_uk_lead_single_tab():

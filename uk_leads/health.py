@@ -7,8 +7,12 @@ from pathlib import Path
 
 import requests
 
-from uk_leads.core import csv_path_for_date
-from uk_leads.data_loader import mauritius_export_stats, pipeline_export_path
+from uk_leads.data_loader import (
+    mauritius_export_stats,
+    pipeline_export_path,
+    uk_pipeline_export_stats,
+)
+from uk_leads.env_config import companies_house_key_status, openai_key_status
 from uk_leads.run_summary import last_run_for_health
 
 CH_TEST_URL = "https://api.company-information.service.gov.uk/search/companies?q=test&items_per_page=1"
@@ -65,18 +69,25 @@ def run_health_checks(target_date: str | None = None) -> dict:
     checked_at = datetime.now(timezone.utc).isoformat()
 
     # Companies House API
-    key = os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip()
-    if not key:
+    ch_status = companies_house_key_status()
+    if not ch_status["configured"]:
+        reason = ch_status.get("reason")
+        msg = (
+            "COMPANIES_HOUSE_API_KEY looks like a placeholder — set a real key in .env"
+            if reason == "placeholder"
+            else "COMPANIES_HOUSE_API_KEY not set in .env"
+        )
         checks.append(
             {
                 "id": "companies_house_api",
                 "name": "Companies House API",
                 "status": "error",
-                "message": "COMPANIES_HOUSE_API_KEY not set in .env",
+                "message": msg,
                 "fix": "Add COMPANIES_HOUSE_API_KEY to your .env file and restart the app.",
             }
         )
     else:
+        key = os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip()
         try:
             resp = requests.get(CH_TEST_URL, auth=(key, ""), timeout=15)
             if resp.status_code == 200:
@@ -121,7 +132,7 @@ def run_health_checks(target_date: str | None = None) -> dict:
                 }
             )
 
-    # Mauritius export
+    # Mauritius snapshot in pipeline export
     mu_path = pipeline_export_path(d)
     mu_yesterday = pipeline_export_path(yesterday)
     mu_file = mu_path if mu_path.exists() else (mu_yesterday if mu_yesterday.exists() else None)
@@ -133,7 +144,7 @@ def run_health_checks(target_date: str | None = None) -> dict:
         checks.append(
             {
                 "id": "mauritius_export",
-                "name": "Mauritius export",
+                "name": "Mauritius snapshot",
                 "status": "ok" if stats["gbc_ac"] > 0 else "warning",
                 "message": (
                     f"{display_date} — {stats['gbc_ac']} GBC/AC included · "
@@ -148,26 +159,24 @@ def run_health_checks(target_date: str | None = None) -> dict:
         checks.append(
             {
                 "id": "mauritius_export",
-                "name": "Mauritius export",
+                "name": "Mauritius snapshot",
                 "status": "warning",
                 "message": "No file for today or yesterday",
                 "fix": f"Run: python main.py --date {d} --skip-difc",
             }
         )
 
-    # UK CSV
-    uk_demo = csv_path_for_date(d, demo=True)
-    uk_full = csv_path_for_date(d, demo=False)
-    uk_file = uk_demo if uk_demo.exists() else (uk_full if uk_full.exists() else None)
-    if uk_file:
-        uk_count = _count_csv_rows(uk_file)
-        mtime = _mtime_iso(uk_file)
+    # UK pipeline snapshot
+    uk_pipe = pipeline_export_path(d)
+    uk_stats = uk_pipeline_export_stats(d)
+    if uk_stats.get("exists") and uk_stats.get("row_count", 0) > 0:
+        mtime = _mtime_iso(uk_pipe)
         checks.append(
             {
                 "id": "uk_export",
-                "name": "UK leads CSV",
-                "status": "ok" if uk_count > 0 else "warning",
-                "message": f"{uk_count} rows — {uk_file.name}",
+                "name": "UK snapshot",
+                "status": "ok",
+                "message": f"{uk_stats['row_count']} UK rows — {uk_pipe.name}",
                 "mtime": mtime,
                 "ago": _ago_label(mtime),
             }
@@ -176,10 +185,10 @@ def run_health_checks(target_date: str | None = None) -> dict:
         checks.append(
             {
                 "id": "uk_export",
-                "name": "UK leads CSV",
+                "name": "UK snapshot",
                 "status": "warning",
-                "message": f"No UK CSV for {d}",
-                "fix": "Click Refresh UK leads or run run_uk_daily.py",
+                "message": f"No UK rows in exports/{d}.csv",
+                "fix": f"Run: python main.py --date {d} --skip-difc",
             }
         )
 
@@ -194,9 +203,19 @@ def run_health_checks(target_date: str | None = None) -> dict:
             }
         )
 
-    # OpenAI
-    if os.environ.get("OPENAI_API_KEY", "").strip():
-        checks.append({"id": "openai", "name": "OpenAI", "status": "ok", "message": "API key present"})
+    # OpenAI (optional — AI brief only)
+    oai = openai_key_status()
+    if oai["configured"]:
+        checks.append({"id": "openai", "name": "OpenAI", "status": "ok", "message": "API key configured"})
+    elif oai.get("reason") == "placeholder":
+        checks.append(
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "status": "warning",
+                "message": "OPENAI_API_KEY looks like a placeholder (optional)",
+            }
+        )
     else:
         checks.append(
             {
@@ -207,7 +226,7 @@ def run_health_checks(target_date: str | None = None) -> dict:
             }
         )
 
-    # Last pipeline run
+    # Latest prepared snapshot file
     export_candidates = sorted(Path("exports").glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
     if export_candidates:
         latest = export_candidates[0]
@@ -229,12 +248,12 @@ def run_health_checks(target_date: str | None = None) -> dict:
         total += mauritius_export_stats(
             d if mu_path.exists() else yesterday
         ).get("gbc_ac", 0)
-    if uk_file:
-        total += _count_csv_rows(uk_file)
+    if uk_pipe.exists():
+        total += uk_stats.get("row_count", 0) or _count_csv_rows(uk_pipe)
     checks.append(
         {
             "id": "total_leads",
-            "name": "Total leads (UK CSV + MU export)",
+            "name": "Total leads in snapshot (UK + MU GBC/AC)",
             "status": "ok" if total else "warning",
             "message": str(total),
         }

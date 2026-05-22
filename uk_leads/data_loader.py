@@ -171,14 +171,8 @@ def load_mauritius_from_pipeline(date: str) -> list[dict]:
     return rows
 
 
-def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict]:
-    """
-    Merge UK + Mauritius rows from exports/{date}.csv (canonical pipeline snapshot).
-
-    The *demo* parameter is retained for API compatibility; merge source is always the
-    pipeline export file, not uk-leads-* snapshot files.
-    """
-    _ = demo
+def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
+    """Merge UK + Mauritius rows from exports/{date}.csv (canonical pipeline snapshot)."""
     pipeline_path = pipeline_export_path(date)
     meta: dict = {
         "pipeline_path": str(pipeline_path),
@@ -221,10 +215,10 @@ def merge_leads_for_date(date: str, demo: bool = True) -> tuple[list[dict], dict
         enriched = enrich_row(base)
         if enriched.get("source") == "mauritius_mns":
             enriched["verify_url"] = MU_VERIFY_URL
-            enriched["sic_codes"] = enriched.get("sic_codes") or "—"
+            if not (enriched.get("company_number") or "").strip():
+                enriched["company_number"] = ""
         lid = lead_id(enriched)
         enriched["lead_id"] = lid
-        enriched["company_number"] = enriched.get("company_number") or lid
         if lid in seen_ids:
             continue
         seen_ids.add(lid)
@@ -267,17 +261,15 @@ def _calendar_nav_dates(lookback_days: int) -> list[str]:
     return [(end - timedelta(days=i)).isoformat() for i in range(lookback_days)]
 
 
-def _has_snapshot_files(date: str, demo: bool) -> bool:
-    _ = demo
+def _has_snapshot_files(date: str) -> bool:
     return pipeline_export_path(date).exists()
 
 
-def _date_counts_for_scan(date: str, demo: bool) -> dict:
-    _ = demo
+def _date_counts_for_scan(date: str) -> dict:
     uk_stats = uk_pipeline_export_stats(date)
     uk_count = uk_stats.get("row_count", 0)
     mu_stats = mauritius_export_stats(date)
-    has_snapshot = _has_snapshot_files(date, demo=False)
+    has_snapshot = _has_snapshot_files(date)
     has_uk = uk_count > 0
     has_mauritius = mu_stats.get("gbc_ac", 0) > 0
     return {
@@ -292,14 +284,14 @@ def _date_counts_for_scan(date: str, demo: bool) -> dict:
     }
 
 
-def scan_available_dates(demo: bool = True, lookback_days: int | None = None) -> dict:
+def scan_available_dates(lookback_days: int | None = None) -> dict:
     """
     Dates the user can navigate to: rolling calendar window + any export/refresh files.
     Returns navigable dates (newest first), per-date counts, and recommended default.
     """
     lookback = lookback_days if lookback_days is not None else default_nav_lookback_days()
     discovered = _discover_export_dates()
-    refreshed = set(refresh_meta.list_refreshed_dates(demo=demo))
+    refreshed = set(refresh_meta.list_refreshed_dates())
     navigable = sorted(
         set(_calendar_nav_dates(lookback)) | discovered | refreshed,
         reverse=True,
@@ -316,7 +308,7 @@ def scan_available_dates(demo: bool = True, lookback_days: int | None = None) ->
             "reason": "No dates in navigation window",
         }
 
-    date_details = [_date_counts_for_scan(d, demo=demo) for d in navigable]
+    date_details = [_date_counts_for_scan(d) for d in navigable]
     snapshot_dates = [d["date"] for d in date_details if d["has_snapshot"]]
     dates_with_data = [d["date"] for d in date_details if d["has_data"]]
     # Operator UI: only days with a pipeline export — not the full calendar padding.

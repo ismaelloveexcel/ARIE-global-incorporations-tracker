@@ -1,5 +1,4 @@
-"""Dashboard classification, lead_id, and assignment tests."""
-from uk_leads.assignments import assign_round_robin
+"""Dashboard classification and lead_id tests."""
 from uk_leads.dashboard import (
     is_direct_client,
     is_introducer,
@@ -64,29 +63,6 @@ def test_lead_id_mu_name_fallback():
     }
     assert lead_id(row).startswith("mu:")
     assert "aura" in lead_id(row)
-
-
-def test_round_robin_direct_pool():
-    store = {"counters": {"direct_counter": 0, "introducer_counter": 0}}
-    pools = {"direct_clients": ["Ismael", "Tasneem"], "introducers": ["Aisha", "Stephen", "Rajesh"]}
-    row = {"source": "companies_house", "company_name": "Foo Ltd"}
-    a = assign_round_robin(row, pools, store)
-    b = assign_round_robin(row, pools, store)
-    assert a == "Ismael"
-    assert b == "Tasneem"
-
-
-def test_round_robin_mu_management_name_uses_direct_pool():
-    """MU GBC/AC with introducer-like name — same Direct Clients pool (no auto introducer tab)."""
-    store = {"counters": {"direct_counter": 0, "introducer_counter": 0}}
-    pools = {"direct_clients": ["Ismael", "Tasneem"], "introducers": ["Aisha", "Stephen", "Rajesh"]}
-    row = {
-        "source": "mauritius_mns",
-        "company_name": "Alpha Management GBC Ltd",
-        "entity_type": "GBC",
-    }
-    person = assign_round_robin(row, pools, store)
-    assert person == "Ismael"
 
 
 def test_gbc_ac_matching():

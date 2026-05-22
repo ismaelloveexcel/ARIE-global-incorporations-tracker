@@ -6,9 +6,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from uk_leads.app_mode import is_production
-from uk_leads.core import csv_path_for_date
-from uk_leads.data_loader import mauritius_export_stats, pipeline_export_path
+from uk_leads.data_loader import mauritius_export_stats, pipeline_export_path, uk_pipeline_export_stats
 from uk_leads.run_summary import load_run_summary
+
+STALE_SNAPSHOT_HOURS = 36
 
 
 def _mtime_iso(path: Path) -> str | None:
@@ -46,34 +47,17 @@ def _format_display_date(iso_date: str) -> str:
         return iso_date
 
 
-def _uk_status(target: str, demo: bool) -> dict:
-    path = csv_path_for_date(target, demo=demo)
-    if path.exists():
-        return {
-            "exists": True,
-            "row_count": _count_csv_rows(path),
-            "file_modified": _mtime_iso(path),
-            "path": str(path),
-        }
-    if demo:
-        full = csv_path_for_date(target, demo=False)
-        if full.exists():
-            return {
-                "exists": True,
-                "row_count": _count_csv_rows(full),
-                "file_modified": _mtime_iso(full),
-                "path": str(full),
-            }
+def _uk_status(target: str) -> dict:
     pipe = pipeline_export_path(target)
-    uk_rows = _count_pipeline_uk(pipe)
-    if uk_rows > 0:
+    stats = uk_pipeline_export_stats(target)
+    if stats.get("exists") and stats.get("row_count", 0) > 0:
         return {
             "exists": True,
-            "row_count": uk_rows,
+            "row_count": stats["row_count"],
             "file_modified": _mtime_iso(pipe),
             "path": str(pipe),
         }
-    return {"exists": False, "row_count": 0, "file_modified": None, "path": str(path)}
+    return {"exists": False, "row_count": 0, "file_modified": None, "path": str(pipe)}
 
 
 def _mauritius_status(target: str) -> dict:
@@ -111,6 +95,47 @@ def _summary_for_date(target: str) -> dict | None:
     }
 
 
+def _snapshot_age_hours(file_modified: str | None, now: datetime) -> float | None:
+    if not file_modified:
+        return None
+    try:
+        modified = datetime.fromisoformat(file_modified.replace("Z", "+00:00"))
+        return (now - modified).total_seconds() / 3600
+    except ValueError:
+        return None
+
+
+def _format_snapshot_timestamp(file_modified: str | None) -> str:
+    if not file_modified:
+        return ""
+    try:
+        t = datetime.fromisoformat(file_modified.replace("Z", "+00:00"))
+        return t.strftime("%d %b %Y %H:%M UTC")
+    except ValueError:
+        return file_modified
+
+
+def _stale_snapshot_banner(
+    uk: dict, mu: dict, now: datetime, target: str, display: str
+) -> dict | None:
+    ts = uk.get("file_modified") or mu.get("file_modified")
+    age = _snapshot_age_hours(ts, now)
+    if age is None or age <= STALE_SNAPSHOT_HOURS:
+        return None
+    stamp = _format_snapshot_timestamp(ts)
+    return {
+        "type": "amber",
+        "message": (
+            f"This snapshot may be stale. Last successful update: {stamp}. "
+            "The overnight pipeline prepares each day's queue — contact operations if you need a newer file."
+        ),
+        "show_alerts_link": is_production(),
+        "pipeline_command": None if is_production() else f"python main.py --date {target} --skip-difc",
+        "auto_hide_seconds": None,
+        "details": {"display_date": display, "variant": "stale_snapshot", "age_hours": round(age, 1)},
+    }
+
+
 def _connector_error(summary: dict | None, key: str) -> str | None:
     if not summary:
         return None
@@ -138,10 +163,14 @@ def _build_banner(
     }
     display = _format_display_date(target)
     pipeline_cmd = None if is_production() else f"python main.py --date {target} --skip-difc"
+    has_snapshot = uk["exists"] or mu["exists"]
+
+    if has_snapshot:
+        stale = _stale_snapshot_banner(uk, mu, now, target, display)
+        if stale:
+            return stale
 
     if not is_today:
-        if uk["exists"] or mu["exists"]:
-            return none
         return none
 
     outcome = (summary or {}).get("pipeline_outcome") if (summary or {}).get(
@@ -270,12 +299,12 @@ def _build_banner(
     return none
 
 
-def get_data_status(target: str, demo: bool = True) -> dict:
+def get_data_status(target: str) -> dict:
     today = date.today().isoformat()
     is_today = target == today
     now = datetime.now(timezone.utc)
 
-    uk = _uk_status(target, demo=demo)
+    uk = _uk_status(target)
     mu = _mauritius_status(target)
     summary = _summary_for_date(target)
     banner = _build_banner(target, is_today, uk, mu, summary, now)

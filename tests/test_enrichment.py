@@ -7,7 +7,6 @@ from uk_leads.enrichment import (
     enrich_row,
     incorporation_age,
     priority_from_score,
-    probable_website_domain,
 )
 
 
@@ -39,10 +38,18 @@ def test_no_fake_contact():
     assert "Pending" in row["contact_email_status"]
 
 
-def test_domain_guess_low_confidence():
-    domain, conf = probable_website_domain("Acme Capital Holdings Ltd")
-    assert domain.endswith(".co.uk")
-    assert conf == "low"
+def test_no_invented_website_domain():
+    row = enrich_row(
+        {
+            "company_name": "Acme Capital Holdings Ltd",
+            "company_number": "1",
+            "jurisdiction": "Mauritius",
+            "source": "mauritius_mns",
+            "score": 50,
+        }
+    )
+    assert "website_domain" not in row
+    assert "website_domain_confidence" not in row
 
 
 def test_incorporation_age_recent():

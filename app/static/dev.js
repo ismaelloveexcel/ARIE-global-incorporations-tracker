@@ -213,7 +213,7 @@ async function runHealth() {
 
 async function loadOverview() {
   const date = $("#devDate").value;
-  const res = await fetch(`/api/dev/stats?incorporation_date=${encodeURIComponent(date)}&demo=true`);
+  const res = await fetch(`/api/dev/stats?incorporation_date=${encodeURIComponent(date)}`);
   const data = await res.json();
   const stats = data.assignment_stats || {};
   let html = `
@@ -344,7 +344,7 @@ function renderImplLog() {
 async function refreshUk() {
   const date = $("#devDate").value;
   $("#pipelineLog").textContent = "Refreshing UK from Companies House…\n";
-  const res = await fetch(`/api/dev/refresh/uk?incorporation_date=${encodeURIComponent(date)}&demo=true`, {
+  const res = await fetch(`/api/dev/refresh/uk?incorporation_date=${encodeURIComponent(date)}`, {
     method: "POST",
   });
   const data = await res.json();

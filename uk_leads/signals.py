@@ -57,8 +57,7 @@ def compute_signals(
     if float(row.get("score") or 0) >= 70:
         strengths.append("Rule-based fit score ≥70 (deterministic scoring model)")
 
-    if not (row.get("website_domain") or "").strip():
-        cautions.append("No verified website on file — digital footprint not confirmed")
+    cautions.append("No verified website on file — digital footprint not confirmed")
 
     for pat in _CRYPTO_CAUTION:
         if re.search(pat, text, re.IGNORECASE):

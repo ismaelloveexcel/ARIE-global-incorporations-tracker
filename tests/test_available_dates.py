@@ -21,7 +21,7 @@ def test_scan_includes_lookback_window(exports_dir):
         "source,company_name,score\ncompanies_house,Acme Ltd,80\n",
         encoding="utf-8",
     )
-    result = scan_available_dates(demo=True, lookback_days=7)
+    result = scan_available_dates(lookback_days=7)
     assert "2026-05-15" in result["dates"]
     assert "2026-05-15" in result["snapshot_dates"]
     assert result["dates"] == ["2026-05-15"]
@@ -32,7 +32,7 @@ def test_scan_includes_lookback_window(exports_dir):
 
 
 def test_scan_marks_unloaded_days(exports_dir):
-    result = scan_available_dates(demo=True, lookback_days=3)
+    result = scan_available_dates(lookback_days=3)
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     assert yesterday not in result["dates"]
     assert yesterday in result["calendar_dates"]

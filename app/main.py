@@ -1,5 +1,5 @@
 """
-Arie Corporate Leads Intelligence — Phase 1 web app.
+Arie Onboarding Intelligence Platform web app.
 
 Run: python -m app.main
 User view: /  (daily incorporation queue)
@@ -25,14 +25,9 @@ load_dotenv()
 
 from uk_leads import assignments, refresh_meta
 from uk_leads.app_mode import is_production, mode_config, operator_refresh_allowed
-from uk_leads.core import (
-    DEMO_MIN_SCORE,
-    DEMO_TOP,
-    TEAM_MEMBERS,
-    csv_path_for_date,
-    export_csv,
-    fetch_uk_leads,
-)
+from uk_leads.env_config import companies_house_key_status, openai_key_status
+from uk_leads.core import TEAM_MEMBERS
+from uk_leads.uk_snapshot import refresh_uk_for_date
 from uk_leads.dashboard import filter_tab_leads, lead_id
 from uk_leads.data_loader import merge_leads_for_date, pipeline_export_path, scan_available_dates
 from uk_leads.mauritius_snapshot import (
@@ -62,11 +57,11 @@ _MU_PEOPLE_MESSAGE = (
     "This will be added when MNS API access is confirmed."
 )
 
-app = FastAPI(title="Arie Corporate Leads Intelligence", version="1.0.0")
+app = FastAPI(title="Arie Onboarding Intelligence Platform", version="1.0.0")
 
 _OPERATOR_REFRESH_DETAIL = (
-    "Live registry refresh is disabled in production. "
-    "Use the nightly pipeline snapshot or /dev for engineering refresh."
+    "In-app registry fetch is disabled in production. "
+    "Use prepared overnight snapshots or /dev for engineering pipeline runs."
 )
 
 
@@ -141,17 +136,17 @@ def compute_tab_metrics(rows: list[dict]) -> dict:
     }
 
 
-def _load_merged_rows(incorporation_date: str, demo: bool) -> tuple[list[dict], dict]:
-    rows, meta = merge_leads_for_date(incorporation_date, demo=demo)
+def _load_merged_rows(incorporation_date: str) -> tuple[list[dict], dict]:
+    rows, meta = merge_leads_for_date(incorporation_date)
     config = load_config()
     pools = config.get("assignment_pools", assignments.DEFAULT_POOLS)
-    rows = assignments.apply_assignments(rows, pools=pools)
+    rows = assignments.merge_saved_fields(rows, pools=pools)
     return rows, meta
 
 
-def _find_lead(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True) -> dict | None:
+def _find_lead(lead_id_key: str, incorporation_date: str | None = None) -> dict | None:
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    rows, _ = _load_merged_rows(d, demo=demo)
+    rows, _ = _load_merged_rows(d)
     for row in rows:
         if row.get("lead_id") == lead_id_key or row.get("company_number") == lead_id_key:
             return row
@@ -159,7 +154,7 @@ def _find_lead(lead_id_key: str, incorporation_date: str | None = None, demo: bo
 
 
 def _normalize_tab(tab: str | None) -> str:
-    """Operator UI uses direct_clients only; introducers tab is deprecated (empty list)."""
+    """Normalize dashboard queue tab."""
     if tab in (None, "", "direct_clients"):
         return "direct_clients"
     if tab == "introducers":
@@ -171,7 +166,6 @@ def _package_response(
     rows: list[dict],
     tab: str | None,
     incorporation_date: str,
-    demo: bool,
     meta: dict,
     last_refreshed: str | None = None,
     total_fetched: int | None = None,
@@ -181,7 +175,6 @@ def _package_response(
 
     return {
         "incorporation_date": incorporation_date,
-        "demo": demo,
         "tab": queue_tab,
         "count": len(rows),
         "total_fetched": total_fetched,
@@ -194,8 +187,8 @@ def _package_response(
 
 
 @app.get("/api/available-dates")
-def api_available_dates(demo: bool = False):
-    payload = scan_available_dates(demo=demo)
+def api_available_dates():
+    payload = scan_available_dates()
     payload["can_fetch_uk"] = bool(os.environ.get("COMPANIES_HOUSE_API_KEY"))
     payload["can_fetch_mauritius"] = mauritius_auto_refresh_enabled()
     return payload
@@ -210,14 +203,13 @@ def _maybe_auto_refresh_mauritius(incorporation_date: str) -> dict | None:
 @app.get("/api/data-status")
 def api_data_status(
     target_date: str | None = Query(None, alias="date"),
-    demo: bool = False,
 ):
     d = target_date or (date.today()).isoformat()
     try:
         date.fromisoformat(d)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid date; use YYYY-MM-DD") from exc
-    return get_data_status(d, demo=demo)
+    return get_data_status(d)
 
 
 @app.get("/api/meta")
@@ -228,11 +220,14 @@ def api_meta():
         "assignment_pools": config.get("assignment_pools"),
         "brand": "Arie Finance",
         "positioning": (
-            "Daily onboarding intelligence — UK Companies House and Mauritius GBC/AC. "
-            "One work queue for client onboarding; introducer relationships tracked manually."
+            "Daily onboarding intelligence and relationship intelligence — UK Companies House "
+            "and Mauritius GBC/AC. Operational queues support both registration candidates "
+            "and introducer opportunities."
         ),
-        "has_api_key": bool(os.environ.get("COMPANIES_HOUSE_API_KEY")),
-        "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
+        "has_api_key": companies_house_key_status()["configured"],
+        "has_openai_key": openai_key_status()["configured"],
+        "companies_house_key": companies_house_key_status(),
+        "openai_key": openai_key_status(),
         "workflow_statuses": assignments.WORKFLOW_STATUSES,
         "priority_thresholds": {"high": 70, "medium": 40},
         **mode_config(),
@@ -243,73 +238,60 @@ def api_meta():
 @app.get("/api/leads")
 def api_leads(
     incorporation_date: str | None = None,
-    demo: bool = False,
     tab: str | None = Query(
         None,
-        description="Queue tab: direct_clients (default). introducers is deprecated and returns an empty list.",
+        description="Queue tab: direct_clients (default) or introducers.",
     ),
 ):
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    rows, meta = _load_merged_rows(d, demo=demo)
+    rows, meta = _load_merged_rows(d)
 
     if not rows and not pipeline_export_path(d).exists():
-        if is_production():
-            detail = (
-                f"No incorporation snapshot is available for {d} yet. "
-                "Try another date or contact operations."
-            )
-        else:
-            detail = (
-                f"No incorporation snapshot is available for {d} yet. "
-                "Try another date or contact operations."
-            )
+        detail = (
+            f"No incorporation snapshot is available for {d} yet. "
+            "Try another date or contact operations."
+        )
         raise HTTPException(status_code=404, detail=detail)
 
-    last = refresh_meta.get_last_refresh(d, demo)
+    last = refresh_meta.get_last_refresh(d)
     pipe = pipeline_export_path(d)
     if not last and pipe.exists():
         last = datetime_from_mtime(pipe)
-    if not last:
-        uk_path = csv_path_for_date(d, demo=demo)
-        if uk_path.exists():
-            last = datetime_from_mtime(uk_path)
 
-    return _package_response(rows, tab, d, demo, meta, last_refreshed=last)
+    return _package_response(rows, tab, d, meta, last_refreshed=last)
 
 
 @app.post("/api/refresh")
 def api_refresh(
     incorporation_date: str | None = None,
-    demo: bool = False,
     tab: str | None = Query(None),
 ):
     _guard_operator_refresh()
-    if not os.environ.get("COMPANIES_HOUSE_API_KEY"):
-        raise HTTPException(status_code=503, detail="COMPANIES_HOUSE_API_KEY not set in .env")
+    if not companies_house_key_status()["configured"]:
+        raise HTTPException(
+            status_code=503,
+            detail="COMPANIES_HOUSE_API_KEY not configured — set a real key in .env",
+        )
 
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    min_score = DEMO_MIN_SCORE if demo else None
-    top = DEMO_TOP if demo else None
-
-    uk_rows, total = fetch_uk_leads(d, d, min_score=min_score, top=top)
-    path = csv_path_for_date(d, demo=demo)
-    export_csv(uk_rows, path)
-    refreshed = refresh_meta.record_refresh(d, demo, total, len(uk_rows))
+    uk_result = refresh_uk_for_date(d)
+    total = uk_result["total_fetched"]
+    refreshed = uk_result["refreshed_at"]
 
     mauritius_result = _maybe_auto_refresh_mauritius(d)
 
-    rows, meta = _load_merged_rows(d, demo=demo)
+    rows, meta = _load_merged_rows(d)
     if mauritius_result:
         meta["mauritius_refresh"] = mauritius_result
+    meta["uk_refresh"] = uk_result
     return _package_response(
-        rows, tab, d, demo, meta, total_fetched=total, last_refreshed=refreshed
+        rows, tab, d, meta, total_fetched=total, last_refreshed=refreshed
     )
 
 
 @app.post("/api/refresh/mauritius")
 def api_refresh_mauritius(
     incorporation_date: str | None = None,
-    demo: bool = False,
     tab: str | None = Query(None),
 ):
     _guard_operator_refresh()
@@ -337,12 +319,12 @@ def api_refresh_mauritius(
             detail=result.get("error_message") or "Mauritius register fetch failed",
         )
 
-    rows, meta = _load_merged_rows(d, demo=demo)
+    rows, meta = _load_merged_rows(d)
     meta["mauritius_refresh"] = result
     last = refresh_meta.get_last_mauritius_refresh(d) or datetime_from_mtime(
         pipeline_export_path(d)
     )
-    return _package_response(rows, tab, d, demo, meta, last_refreshed=last)
+    return _package_response(rows, tab, d, meta, last_refreshed=last)
 
 
 @app.patch("/api/leads/{lead_id_key}")
@@ -365,10 +347,9 @@ def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
 def api_lead_people(
     lead_id_key: str,
     incorporation_date: str | None = None,
-    demo: bool = True,
     refresh: bool = Query(False, description="Bypass cache and refetch from Companies House"),
 ):
-    lead = _find_lead(lead_id_key, incorporation_date, demo=demo)
+    lead = _find_lead(lead_id_key, incorporation_date)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -439,7 +420,7 @@ def api_lead_people(
 
 
 @app.post("/api/leads/{lead_id_key}/brief")
-def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None, demo: bool = True):
+def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None):
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY not set in .env")
 
@@ -447,7 +428,7 @@ def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None, 
     from uk_leads.companies_house_people import fetch_people
     from uk_leads.signals import compute_signals
 
-    lead = _find_lead(lead_id_key, incorporation_date, demo=demo)
+    lead = _find_lead(lead_id_key, incorporation_date)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not in loaded dataset.")
 
@@ -518,9 +499,9 @@ def api_dev_config_post(body: DevConfigUpdate):
 
 
 @app.post("/api/dev/refresh/uk")
-def api_dev_refresh_uk(incorporation_date: str | None = None, demo: bool = True):
+def api_dev_refresh_uk(incorporation_date: str | None = None):
     _guard_dev_only()
-    return api_refresh(incorporation_date=incorporation_date, demo=demo)
+    return api_refresh(incorporation_date=incorporation_date)
 
 
 @app.post("/api/dev/refresh/mauritius")
@@ -541,10 +522,10 @@ def api_dev_pipeline_alerts():
 
 
 @app.get("/api/dev/stats")
-def api_dev_stats(incorporation_date: str | None = None, demo: bool = True):
+def api_dev_stats(incorporation_date: str | None = None):
     _guard_dev_only()
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
-    rows, _ = _load_merged_rows(d, demo=demo)
+    rows, _ = _load_merged_rows(d)
     direct = filter_tab_leads(rows, "direct_clients")
     return {
         "date": d,

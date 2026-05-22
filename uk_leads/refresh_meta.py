@@ -1,4 +1,4 @@
-"""Track last successful API refresh per incorporation date."""
+"""Track last successful engineering snapshot build per incorporation date."""
 from __future__ import annotations
 
 import json
@@ -24,13 +24,14 @@ def _save(data: dict) -> None:
         json.dump(data, fh, indent=2)
 
 
-def record_refresh(incorporation_date: str, demo: bool, total_fetched: int, exported: int) -> str:
+def record_refresh(
+    incorporation_date: str, *, total_fetched: int, exported: int
+) -> str:
     ts = datetime.now(timezone.utc).isoformat()
     data = _load()
-    key = f"{incorporation_date}:{'demo' if demo else 'full'}"
+    key = f"uk:{incorporation_date}"
     data[key] = {
         "incorporation_date": incorporation_date,
-        "demo": demo,
         "refreshed_at": ts,
         "total_fetched": total_fetched,
         "exported": exported,
@@ -39,12 +40,16 @@ def record_refresh(incorporation_date: str, demo: bool, total_fetched: int, expo
     return ts
 
 
-def get_last_refresh(incorporation_date: str, demo: bool) -> str | None:
+def get_last_refresh(incorporation_date: str) -> str | None:
     data = _load()
-    key = f"{incorporation_date}:{'demo' if demo else 'full'}"
-    entry = data.get(key)
+    entry = data.get(f"uk:{incorporation_date}")
     if entry:
         return entry.get("refreshed_at")
+    # Legacy keys from pre-PR1 refresh metadata
+    for legacy_key in (incorporation_date, f"{incorporation_date}:full", f"{incorporation_date}:demo"):
+        entry = data.get(legacy_key)
+        if isinstance(entry, dict) and entry.get("refreshed_at"):
+            return entry.get("refreshed_at")
     return None
 
 
@@ -81,16 +86,24 @@ def get_last_mauritius_refresh(incorporation_date: str) -> str | None:
     return None
 
 
-def list_refreshed_dates(demo: bool) -> list[str]:
+def list_refreshed_dates() -> list[str]:
     """Incorporation dates that were loaded via the in-app UK refresh."""
     data = _load()
     out: list[str] = []
-    for entry in data.values():
+    for key, entry in data.items():
         if not isinstance(entry, dict):
             continue
-        if bool(entry.get("demo")) != demo:
+        if not str(key).startswith("uk:"):
             continue
         d = (entry.get("incorporation_date") or "").strip()
         if d:
             out.append(d)
+    # Legacy entries without uk: prefix
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("demo") is not None:
+            d = (entry.get("incorporation_date") or "").strip()
+            if d:
+                out.append(d)
     return sorted(set(out), reverse=True)

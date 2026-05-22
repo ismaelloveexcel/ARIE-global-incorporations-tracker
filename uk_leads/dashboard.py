@@ -17,14 +17,6 @@ _INTRODUCER_KEYWORDS = (
     "associates",
     "secretarial",
     "administration",
-    "capital",
-    "fund",
-    "holdings",
-    "investment",
-    "group",
-    "international",
-    "global",
-    "wealth",
     "family office",
 )
 
@@ -112,20 +104,15 @@ def filter_tab_leads(rows: list[dict], tab: str) -> list[dict]:
     if tab == "direct_clients":
         return [r for r in rows if is_direct_client(r)]
     if tab == "introducers":
-        # Introducer relationships are maintained manually — not auto-split from pipeline.
-        return []
+        return [r for r in rows if is_introducer(r)]
     return rows
 
 
 def dashboard_tabs_for_lead(row: dict) -> list[str]:
-    """Which dashboard tabs include this lead (operator UI uses direct_clients only)."""
+    """Which dashboard tabs include this lead."""
+    tabs: list[str] = []
     if is_direct_client(row):
-        return ["direct_clients"]
-    return []
-
-
-def assignment_pool_for_lead(row: dict, pools: dict[str, list[str]]) -> list[str] | None:
-    """Which round-robin pool applies when lead has no saved assignment."""
-    if is_direct_client(row):
-        return pools.get("direct_clients")
-    return None
+        tabs.append("direct_clients")
+    if is_introducer(row):
+        tabs.append("introducers")
+    return tabs

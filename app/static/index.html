@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arie Corporate Leads Intelligence</title>
+    <title>Arie Onboarding Intelligence Platform</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,7 +15,7 @@
   <body class="decision-ui">
     <div class="loading-overlay" id="loadingOverlay" hidden role="status" aria-live="assertive" aria-busy="false">
       <div class="spinner" aria-hidden="true"></div>
-      <p id="loadingText">Retrieving incorporation records…</p>
+      <p id="loadingText">Loading prepared snapshot…</p>
     </div>
 
     <header class="header header--minimal">
@@ -24,7 +24,7 @@
           <a class="brand-home" href="https://www.ariefinance.com/" target="_blank" rel="noopener noreferrer" title="Arie Finance website"><span class="brand-mark" aria-hidden="true">A</span></a>
           <div>
             <p class="brand-eyebrow">Arie Finance</p>
-            <h1>Corporate Leads Intelligence</h1>
+            <h1>Onboarding Intelligence Platform</h1>
           </div>
           <span class="env-badge {{ENV_BADGE_CLASS}}" id="envBadge">{{ENV_BADGE}}</span>
         </div>
@@ -38,14 +38,10 @@
             <button type="button" class="btn-icon" id="dateNext" aria-label="Next prepared snapshot" title="Next prepared snapshot"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-right"/></svg></button>
           </div>
           <!--@DEV_ONLY:START-->
-          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Refresh register data" title="Refresh register data"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
+          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Build snapshot from registries (dev)" title="Build snapshot from registries (dev)"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
           <details class="header-utilities header-utilities--icon">
             <summary class="btn-icon" aria-label="Settings" title="Settings"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-settings"/></svg></summary>
             <div class="header-utilities__panel">
-              <label class="toggle toggle--compact" id="demoCapWrap">
-                <input type="checkbox" id="demoMode" />
-                <span id="demoModeLabel">Limit UK queue to top 25 by score</span>
-              </label>
               <a class="btn btn-ghost btn-sm" id="devOpsLink" href="/dev" target="_blank" rel="noopener">Operations</a>
             </div>
           </details>
@@ -55,29 +51,53 @@
     </header>
 
     <div class="trust-strip" id="trustStrip" role="status" aria-live="polite">
-      <div class="trust-strip__inner" id="trustStripInner">Verifying snapshot status…</div>
+      <div class="trust-strip__inner" id="trustStripInner">Checking prepared snapshot status…</div>
     </div>
 
     <div class="shell">
-      <section class="decision-hero" aria-label="Daily corporate leads review">
+      <section class="ui-mode-switch" aria-label="Display mode">
+        <div>
+          <p class="ui-mode-switch__title">Technical Monitoring Mode</p>
+          <p class="ui-mode-switch__summary">Full operational context is always visible for system monitoring and troubleshooting.</p>
+        </div>
+      </section>
+
+      <section class="decision-hero card-surface" aria-label="Registration Intelligence Queue">
         <div class="decision-hero__copy">
-          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Daily corporate leads review</p>
-          <h2 class="decision-hero__date" id="queueHeroDate">—</h2>
+          <p class="section-label">Executive Summary</p>
+          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Onboarding Intelligence Queue</p>
+          <div class="decision-hero__status">
+            <h2 class="decision-hero__date" id="queueHeroDate">—</h2>
+            <p class="decision-hero__updated" id="queueHeroRefreshed">—</p>
+          </div>
           <p class="decision-hero__meta" id="queueHeroMeta" hidden></p>
           <div class="hero-analytics" id="queueHeroStats" aria-live="polite"></div>
-          <p class="decision-hero__updated" id="queueHeroRefreshed">—</p>
         </div>
         <div class="decision-hero__action">
-          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review lead queue</button>
+          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review / Assessment Queue</button>
           <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
         </div>
+      </section>
+
+      <nav class="queue-tabs card-surface card-surface--tight" role="tablist" aria-label="Operational intelligence channels">
+        <button type="button" class="queue-tabs__btn active" role="tab" id="tabDirect" aria-selected="true" aria-controls="directClientsView" data-view="direct_clients">Onboarding Intelligence Queue</button>
+        <button type="button" class="queue-tabs__btn" role="tab" id="tabIntroducers" aria-selected="false" aria-controls="introducersView" data-view="introducers">Introducer Intelligence Channel</button>
+      </nav>
+
+      <section class="provenance-panel card-surface" id="intelligenceProvenance" aria-label="Governance / Provenance Layer">
+        <p class="section-label">Risk &amp; Compliance Signals</p>
+        <p class="provenance-panel__title">Governance / Provenance Layer</p>
+        <p class="provenance-panel__subtitle">Decision-ready workflow states: High Relevance, Monitor, Introducer Opportunity, Not Relevant</p>
+        <div class="provenance-panel__items" id="provenancePanelItems"></div>
       </section>
 
       <p class="queue-guidance" id="tabGuidance" aria-live="polite"></p>
       <div id="dataStatusBanner" class="data-status-banner" hidden aria-live="polite"></div>
       <div id="queueErrorBanner" class="queue-error-banner" hidden role="alert" aria-live="assertive"></div>
 
-      <main class="main">
+      <main class="main card-surface card-surface--spacious" id="directClientsView" role="tabpanel" aria-labelledby="tabDirect">
+        <p class="section-label">Operational Breakdown</p>
+        <section class="executive-quick-bar" id="executiveQuickBar" aria-label="Executive quick metrics"></section>
         <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
           <p id="mauritiusMissingText"></p>
           <!--@DEV_ONLY:START-->
@@ -106,36 +126,81 @@
             <input type="search" id="filterSearch" name="search" placeholder="Search company…" autocomplete="off" />
           </label>
         </form>
+        <p class="decision-bar__note muted">Prioritisation uses Internal heuristic rankings.</p>
+        <p class="decision-bar__note muted">Verification links open Registry verified official registries.</p>
 
         <section class="panel table-panel table-panel--minimal" aria-labelledby="panelTitle">
           <div class="panel-head panel-head-row">
             <div>
-              <h2 id="panelTitle" class="visually-hidden">Lead queue</h2>
-              <p id="panelSubtitle" class="panel-subtitle-muted" hidden></p>
+              <h2 id="panelTitle">Registration Intelligence Queue</h2>
+              <p id="panelSubtitle" class="panel-subtitle-muted" aria-live="polite"></p>
             </div>
             <button type="button" class="btn btn-ghost btn-sm" id="exportBtn" title="Download the leads currently shown (filters and sort applied)">Export current view</button>
           </div>
           <div class="table-wrap table-wrap--soft">
             <table id="leadsTable">
-              <caption class="visually-hidden">Leads to review — open a row for full detail</caption>
+              <caption class="visually-hidden">Candidate entities for review — open a row for full detail</caption>
               <thead>
                 <tr>
-                  <th scope="col" data-sort="company_name" class="sortable">Company</th>
+                  <th scope="col" data-sort="company_name" class="sortable">Name of Entity</th>
                   <th scope="col" data-sort="score" class="sortable">Score</th>
                   <th scope="col">Intelligence</th>
                   <th scope="col" data-sort="assigned_to" class="sortable">
-                    <span class="col-hint">Recommended RM</span>
+                    <span class="col-hint">Assigned</span>
                   </th>
                   <th scope="col" class="col-chevron"><span class="col-hint">Review</span></th>
                 </tr>
               </thead>
               <tbody id="leadsBody">
-                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading incorporation records…</p></div></td></tr>
+                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading prepared snapshot…</p></div></td></tr>
               </tbody>
             </table>
           </div>
         </section>
       </main>
+
+      <section class="introducers-panel" id="introducersView" role="tabpanel" aria-labelledby="tabIntroducers" hidden>
+        <div class="introducers-layout">
+          <section class="introducers-insights-card" aria-label="Introducer insights">
+            <div class="introducers-insights-card__head">
+              <h2>Introducer Insights</h2>
+              <span class="introducers-insights-card__badge">Operational Metrics</span>
+            </div>
+            <div class="introducers-insights-card__grid" id="introducerInsights"></div>
+          </section>
+
+          <section class="panel table-panel table-panel--minimal">
+            <div class="panel-head panel-head-row">
+              <div>
+                <h3 class="panel-title">Partner / Introducer Intelligence</h3>
+                <p class="panel-subtitle-muted">Management Company, CSP, Fiduciary, Legal / Advisory</p>
+              </div>
+            </div>
+            <div class="table-wrap table-wrap--soft">
+              <table id="introducersTable">
+                <caption class="visually-hidden">Introducer candidates for relationship review</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Firm</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Relevance</th>
+                    <th scope="col">Assigned</th>
+                    <th scope="col" class="col-chevron"><span class="col-hint">Review</span></th>
+                  </tr>
+                </thead>
+                <tbody id="introducersBody">
+                  <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading introducer candidates…</p></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <footer class="ops-footer" id="opsFooter" aria-label="Application information">
+        <p class="ops-footer__line">Prepared operational snapshot · snapshot-first queue</p>
+        <p class="ops-footer__version">Operational Queue v1</p>
+      </footer>
     </div>
 
     <div class="detail-backdrop" id="detailBackdrop" hidden></div>

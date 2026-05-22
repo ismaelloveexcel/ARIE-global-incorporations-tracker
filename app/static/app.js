@@ -1,14 +1,14 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-const PANEL_STATUSES = ["New", "Contacted", "Not Interested", "Converted"];
+const PANEL_STATUSES = ["High Relevance", "Monitor", "Introducer Opportunity", "Not Relevant"];
 const MU_DIRECTOR_MSG =
   "Director and PSC data is not yet available for Mauritius companies. This will be added when MNS API access is confirmed.";
 
 let team = [];
 let assignmentPools = {};
 let allLeads = [];
-const QUEUE_TAB = "direct_clients";
+const DEFAULT_QUEUE_TAB = "direct_clients";
 let sortKey = "score";
 let sortDir = "desc";
 let lastPayload = null;
@@ -27,12 +27,14 @@ let isProductionMode = false;
 let operatorRefreshAllowed = true;
 let lastDataStatus = null;
 let detailReturnFocus = null;
+let activeQueueView = "direct_clients";
+let uiViewMode = "technical";
 const TABLE_COLSPAN = 5;
 const SCORE_TIERS = { high: 70, strong: 40, monitor: 0 };
 
 const VIEW_MODES = {
-  strong: { minScore: SCORE_TIERS.strong, label: "Evaluate Soon" },
-  all: { minScore: 0, label: "All Leads" },
+  strong: { minScore: SCORE_TIERS.strong, label: "High Relevance" },
+  all: { minScore: 0, label: "Candidate Entities" },
 };
 
 function createDefaultFilterState() {
@@ -56,18 +58,46 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function isDemoCapEnabled() {
-  return !!$("#demoMode")?.checked;
-}
-
 function pipelineCommandToday() {
   return `python main.py --date ${todayISO()} --skip-difc`;
+}
+
+const PROVENANCE_LABELS = {
+  registry: "Registry Verified",
+  heuristic: "Heuristic Signal",
+  ai: "AI-Assisted Classification",
+  unavailable: "No Data Available",
+};
+
+function provenanceLabel(kind) {
+  const text = PROVENANCE_LABELS[kind] || kind;
+  return `<span class="provenance-label provenance-label--${kind}">${escapeHtml(text)}</span>`;
+}
+
+function renderProvenancePanel() {
+  const panel = $("#provenancePanelItems");
+  if (!panel) return;
+  panel.innerHTML = `
+    ${provenanceLabel("registry")}
+    ${provenanceLabel("heuristic")}
+    ${provenanceLabel("ai")}
+    ${provenanceLabel("unavailable")}
+  `;
 }
 
 function escapeHtml(s) {
   const d = document.createElement("div");
   d.textContent = s ?? "";
   return d.innerHTML;
+}
+
+function operatorSafeErrorMessage(raw) {
+  const msg = String(raw || "").trim();
+  if (!msg) return "Unable to load this snapshot. Contact operations if this continues.";
+  if (msg.length > 160 || /traceback|exception|errno|syntaxerror|typeerror/i.test(msg)) {
+    return "Unable to load this snapshot. Contact operations if this continues.";
+  }
+  return msg;
 }
 
 function showToast(msg, isError = false) {
@@ -125,9 +155,34 @@ function commitFilterState() {
   syncViewModeButtons();
   updateExportButtonLabel();
   updateTabGuidance();
+  renderExecutiveQuickBar();
   renderTable();
+  renderIntroducersView();
   renderQueueFromFiltered();
   updateHeroMetaLine();
+  if (lastDataStatus) renderTrustStrip(lastDataStatus);
+}
+
+function applyUiViewModeToDom() {
+  const body = document.body;
+  if (!body) return;
+  uiViewMode = "technical";
+  body.classList.remove("ui-view-executive", "ui-view-technical");
+  body.classList.add("ui-view-technical");
+  document.querySelectorAll(".ui-mode-switch__btn[data-mode]").forEach((btn) => {
+    const on = btn.dataset.mode === "technical";
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function setUiViewMode(mode) {
+  if (mode !== "executive" && mode !== "technical") return;
+  uiViewMode = mode;
+  applyUiViewModeToDom();
+  renderTable();
+  renderIntroducersView();
+  updateTabGuidance();
   if (lastDataStatus) renderTrustStrip(lastDataStatus);
 }
 
@@ -138,9 +193,9 @@ function setFilterState(partial) {
 
 function applyScoreTierLabels() {
   const heroBtn = $("#reviewHighPriorityBtn");
-  if (heroBtn) heroBtn.textContent = "Review lead queue";
+  if (heroBtn) heroBtn.textContent = "Review / Assessment Queue";
   const heroEyebrow = $("#queueHeroEyebrow");
-  if (heroEyebrow) heroEyebrow.textContent = "Daily corporate leads review";
+  if (heroEyebrow) heroEyebrow.textContent = "Onboarding Intelligence Queue";
   document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
     const mode = VIEW_MODES[btn.dataset.view];
     if (mode) btn.textContent = mode.label;
@@ -206,7 +261,7 @@ function exportScopeLabel() {
 function updateExportButtonLabel() {
   const btn = $("#exportBtn");
   if (!btn) return;
-  const n = getFilteredLeads().length;
+  const n = queueScopedLeads(getFilteredLeads()).length;
   const scope = exportScopeLabel();
   btn.textContent = n
     ? `Export current view (${n} ${scope})`
@@ -228,8 +283,8 @@ function formatRefreshed(iso) {
 }
 
 function scrollToLeadQueue() {
-  const n = getFilteredLeads().length;
-  if (!n) showToast("No leads in this snapshot", true);
+  const n = queueScopedLeads(getFilteredLeads()).length;
+  if (!n) showToast("No candidates in this snapshot", true);
   document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -312,70 +367,115 @@ function renderChartCard(title, segments, ariaSummary) {
     </article>`;
 }
 
-function renderHeroAnalytics(statsEl) {
+function renderQueueSummaryMetrics(statsEl, metrics) {
   if (!statsEl) return;
-  if (!allLeads.length) {
+  const m = metrics || {};
+  const total = Number(m.total_leads) || 0;
+  if (!total && !allLeads.length) {
     statsEl.innerHTML =
-      '<p class="hero-analytics__empty muted">Load a prepared snapshot to see jurisdiction and priority breakdown.</p>';
+      '<p class="queue-summary__empty muted">Load a prepared snapshot to see queue totals.</p>';
     return;
   }
-  const { uk, mu } = countUkMu(allLeads);
-  const buckets = countPriorityBuckets(allLeads);
-  const jurisdictionSummary = `United Kingdom ${uk}, Mauritius ${mu}, ${uk + mu} total`;
-  const prioritySummary = `High priority ${buckets.high}, evaluate soon ${buckets.evaluate}, monitor ${buckets.monitor}`;
+  const uk = Number(m.uk_count) || 0;
+  const mu = Number(m.mauritius_count) || 0;
+  const high = Number(m.high_priority) || 0;
   statsEl.innerHTML = `
-    <div class="hero-analytics__grid">
-      ${renderChartCard(
-        "By jurisdiction",
-        [
-          { label: "United Kingdom", value: uk, color: "#1a3560" },
-          { label: "Mauritius", value: mu, color: "#3d6ea8" },
-        ],
-        jurisdictionSummary
-      )}
-      ${renderChartCard(
-        "By review priority",
-        [
-          { label: "High priority (70+)", value: buckets.high, color: "#0d7a52" },
-          { label: "Evaluate soon", value: buckets.evaluate, color: "#c9a84c" },
-          { label: "Monitor", value: buckets.monitor, color: "#c5ced9" },
-        ],
-        prioritySummary
-      )}
+    <p class="queue-summary__caption muted">Executive queue summary</p>
+    <div class="queue-summary" role="group" aria-label="Queue summary for this snapshot">
+      <div class="queue-summary__item">
+        <span class="queue-summary__value">${total}</span>
+        <span class="queue-summary__label">Candidate Entities</span>
+      </div>
+      <div class="queue-summary__item">
+        <span class="queue-summary__value">${uk}</span>
+        <span class="queue-summary__label">United Kingdom</span>
+      </div>
+      <div class="queue-summary__item">
+        <span class="queue-summary__value">${mu}</span>
+        <span class="queue-summary__label">Mauritius</span>
+      </div>
+      <div class="queue-summary__item queue-summary__item--highlight">
+        <span class="queue-summary__value">${high}</span>
+        <span class="queue-summary__label">High Relevance (${SCORE_TIERS.high}+)</span>
+      </div>
     </div>`;
+}
+
+function renderExecutiveQuickBar() {
+  const el = $("#executiveQuickBar");
+  if (!el) return;
+
+  const rows = queueScopedLeads(getFilteredLeads());
+  const scopeLabel = activeQueueView === "introducers" ? "Introducers Queue" : "Onboarding Queue";
+  const total = rows.length;
+  const high = rows.filter((l) => (Number(l.score) || 0) >= SCORE_TIERS.high).length;
+  const assigned = rows.filter((l) => (l.assigned_to || "").trim()).length;
+  const statusType = lastDataStatus?.banner?.type || "green";
+  const statusLabel =
+    statusType === "red"
+      ? "Issue"
+      : statusType === "amber"
+        ? "Check"
+        : "Healthy";
+
+  el.innerHTML = `
+    <article class="executive-quick-bar__item">
+      <p class="executive-quick-bar__label">Entities In View (${scopeLabel})</p>
+      <p class="executive-quick-bar__value">${total}</p>
+    </article>
+    <article class="executive-quick-bar__item executive-quick-bar__item--highlight">
+      <p class="executive-quick-bar__label">High Relevance</p>
+      <p class="executive-quick-bar__value">${high}</p>
+    </article>
+    <article class="executive-quick-bar__item">
+      <p class="executive-quick-bar__label">Assigned</p>
+      <p class="executive-quick-bar__value">${assigned}</p>
+    </article>
+    <article class="executive-quick-bar__item">
+      <p class="executive-quick-bar__label">Snapshot Health</p>
+      <p class="executive-quick-bar__value executive-quick-bar__status executive-quick-bar__status--${statusType}">${statusLabel}</p>
+    </article>`;
 }
 
 function updateHeroMetaLine() {
   const metaEl = $("#queueHeroMeta");
   if (!metaEl) return;
-  const total = allLeads.length;
+  const scopeLabel = activeQueueView === "introducers" ? "Introducers Queue" : "Onboarding Queue";
+  const total = queueScopedLeads(allLeads).length;
   if (!total) {
     metaEl.hidden = true;
     metaEl.textContent = "";
     return;
   }
-  const visible = getFilteredLeads().length;
+  const visible = queueScopedLeads(getFilteredLeads()).length;
   const mode = VIEW_MODES[filterState.viewMode]?.label || "View";
   if (visible === total) {
-    metaEl.textContent = `${total} companies in this snapshot · ${mode}`;
+    metaEl.textContent = `${scopeLabel} · ${total} candidate entities in this snapshot · ${mode}`;
   } else {
-    metaEl.textContent = `Showing ${visible} of ${total} companies in the table · ${mode}`;
+    metaEl.textContent = `${scopeLabel} · showing ${visible} of ${total} candidate entities · ${mode}`;
   }
   metaEl.hidden = false;
 }
 
 function updateTablePanelSubtitle() {
-  const total = allLeads.length;
+  const total = queueScopedLeads(allLeads).length;
   if (!total) {
     setPanelSubtitle("");
     return;
   }
-  const visible = getFilteredLeads().length;
+  const visible = queueScopedLeads(getFilteredLeads()).length;
   const dateLabel = formatDisplayDateShort(getCurrentDate());
+  const wrap = document.querySelector(".table-wrap");
+  const scrollMore =
+    wrap?.classList.contains("is-scrollable-y") && visible > 0 ? " · Scroll for more" : "";
   if (visible === total) {
-    setPanelSubtitle(`${total} companies · snapshot ${dateLabel}`);
+    setPanelSubtitle(
+      `${total} candidate entities in Registration Intelligence Queue · ${dateLabel}${scrollMore}`
+    );
   } else {
-    setPanelSubtitle(`${visible} of ${total} companies shown · snapshot ${dateLabel}`);
+    setPanelSubtitle(
+      `${visible} of ${total} candidate entities shown · ${dateLabel}${scrollMore}`
+    );
   }
 }
 
@@ -388,6 +488,36 @@ function isMauritiusLead(lead) {
   return source === "mauritius_mns" || (lead?.jurisdiction || "").trim() === "Mauritius";
 }
 
+function isIntroducerLead(lead) {
+  return leadHasQueueTab(lead, "introducers");
+}
+
+function leadHasQueueTab(lead, tab) {
+  const tabs = Array.isArray(lead?.dashboard_tabs)
+    ? lead.dashboard_tabs.map((t) => String(t || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const normalized = String(tab || "").trim().toLowerCase();
+  if (tabs.length) return tabs.includes(normalized);
+  if (normalized === "introducers") return (lead?.lead_type || "").toLowerCase() === "introducer";
+  if (normalized === "direct_clients") return (lead?.lead_type || "").toLowerCase() !== "introducer";
+  return false;
+}
+
+function queueScopedLeads(rows = [], queueView = activeQueueView) {
+  return rows.filter((lead) => leadHasQueueTab(lead, queueView));
+}
+
+function introducerCategoryFromName(name) {
+  const text = (name || "").toLowerCase();
+  if (/management\s+company|management/i.test(text)) return "Management Company";
+  if (/fiduciary|trust|trustee|nominee/i.test(text)) return "Fiduciary";
+  if (/corporate\s+services|secretarial|administration|csp/i.test(text)) return "CSP";
+  if (/legal|solicitor|law|attorney|advisory|advisor|adviser/i.test(text)) {
+    return "Legal / Advisory";
+  }
+  return "Legal / Advisory";
+}
+
 function leadKey(lead) {
   return lead?.lead_id || lead?.company_number || "";
 }
@@ -395,11 +525,6 @@ function leadKey(lead) {
 function applyOperationalMode(meta) {
   isProductionMode = !!meta?.is_production;
   operatorRefreshAllowed = meta?.operator_refresh_allowed !== false;
-
-  const demoBox = $("#demoMode");
-  if (demoBox && !demoBox.dataset.userTouched) {
-    demoBox.checked = !!meta?.default_demo_cap;
-  }
 
   const devLink = $("#devOpsLink");
   if (devLink) devLink.hidden = meta?.show_dev_link === false;
@@ -409,13 +534,13 @@ function applyOperationalMode(meta) {
     refreshBtn.hidden = !operatorRefreshAllowed;
     refreshBtn.disabled = !operatorRefreshAllowed;
     refreshBtn.title = operatorRefreshAllowed
-      ? "Refresh register data"
-      : "Register data is prepared overnight — contact operations if a date is missing";
+      ? "Engineering: build UK snapshot into exports/ (dev only)"
+      : "Snapshots are prepared overnight — contact operations if a date is missing";
   }
 
   const badge = $("#envBadge");
   if (badge && meta?.is_production !== undefined) {
-    badge.textContent = meta.is_production ? "LIVE SNAPSHOT" : "DEV MODE";
+    badge.textContent = meta.is_production ? "PRODUCTION" : "DEV MODE";
     badge.classList.toggle("env-badge--live", !!meta.is_production);
     badge.classList.toggle("env-badge--dev", !meta.is_production);
   }
@@ -448,9 +573,8 @@ async function loadMeta() {
 }
 
 async function loadAvailableDates() {
-  const demo = isDemoCapEnabled();
   try {
-    const res = await fetch(`/api/available-dates?demo=${demo}`);
+    const res = await fetch("/api/available-dates");
     datesApiOk = res.ok;
     if (!res.ok) {
       availableDates = [];
@@ -543,9 +667,14 @@ function dateOptionLabel(d) {
   return label;
 }
 
-function poolMembersForTab() {
-  const members = assignmentPools.direct_clients;
-  if (Array.isArray(members) && members.length) return members;
+function poolMembersForTab(tab = activeQueueView) {
+  if (tab === "introducers") {
+    const intro = assignmentPools.introducers;
+    if (Array.isArray(intro) && intro.length) return intro;
+    return ["Aisha", "Stephen", "Rajesh"];
+  }
+  const direct = assignmentPools.direct_clients;
+  if (Array.isArray(direct) && direct.length) return direct;
   return ["Ismael", "Tasneem"];
 }
 
@@ -565,8 +694,8 @@ function syncSnapshotControls() {
     sel.innerHTML = "";
     emptyEl.hidden = false;
     emptyEl.textContent = datesApiOk
-      ? "Date list unavailable — refresh the page"
-      : "Snapshot list unavailable — check that the app server is up to date";
+      ? "Snapshot dates unavailable — reload the page"
+      : "Snapshot dates unavailable — contact operations";
     if (nav) nav.classList.add("header-date-nav--disabled");
     return;
   }
@@ -612,31 +741,40 @@ function renderQueueHero(payload) {
         ? "Pick a date in the header to load leads"
         : isProductionMode
           ? "Choose a snapshot date — contact operations if data is missing"
-          : "Run the daily pipeline or refresh register data in Settings";
+          : "Run the overnight pipeline or build a snapshot in Settings (dev)";
     }
     if (statsEl) {
       statsEl.innerHTML =
-        '<p class="hero-analytics__empty muted">Pick a snapshot date to load the queue.</p>';
+          '<p class="queue-summary__empty muted">Pick a snapshot date to load the queue.</p>';
     }
     updateHeroMetaLine();
     return;
   }
 
   dateEl.textContent = formatDisplayDate(d);
-  renderHeroAnalytics(statsEl);
+  const metrics = payload?.metrics || (allLeads.length ? {
+    total_leads: allLeads.length,
+    uk_count: countUkMu(allLeads).uk,
+    mauritius_count: countUkMu(allLeads).mu,
+    high_priority: allLeads.filter((l) => (Number(l.score) || 0) >= SCORE_TIERS.high).length,
+  } : null);
+  renderQueueSummaryMetrics(statsEl, metrics);
   updateHeroMetaLine();
   if (refreshedEl) {
-    const buckets = allLeads.length ? countPriorityBuckets(allLeads) : null;
+    const ukMod = lastDataStatus?.uk?.file_modified;
+    const muMod = lastDataStatus?.mauritius?.file_modified;
+    const snapshotTs = ukMod || muMod;
     const refreshed = payload?.last_refreshed
       ? formatRefreshedShort(payload.last_refreshed)
-      : "";
-    if (buckets && refreshed) {
-      refreshedEl.textContent = `${refreshed} · ${buckets.high} high · ${buckets.evaluate} evaluate · ${buckets.monitor} monitor`;
-    } else if (buckets) {
-      refreshedEl.textContent = `${buckets.high} high priority · ${buckets.evaluate} evaluate soon · ${buckets.monitor} monitor · sorted by score`;
-    } else {
-      refreshedEl.textContent = refreshed || "Sorted by opportunity score";
+      : snapshotTs
+        ? formatTrustGenerated(snapshotTs)
+        : "";
+    const parts = [];
+    if (refreshed) parts.push(`Last successful update ${refreshed}`);
+    if (lastDataStatus?.banner?.type === "amber" && /stale/i.test(lastDataStatus.banner.message || "")) {
+      parts.push("Snapshot may be stale — review before decisioning");
     }
+    refreshedEl.textContent = parts.length ? parts.join(" · ") : "Awaiting last successful update timestamp";
   }
   syncSnapshotControls();
 }
@@ -651,26 +789,26 @@ function jurisdictionGuidancePhrase() {
 function updateTabGuidance() {
   const el = $("#tabGuidance");
   if (!el) return;
-  const n = getFilteredLeads().length;
+  const n = queueScopedLeads(getFilteredLeads()).length;
   const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.all;
   const min = mode.minScore;
   const modePhrase =
-    filterState.viewMode === "strong" ? "evaluate-soon queue" : "all leads";
+    filterState.viewMode === "strong" ? "high-relevance queue" : "candidate-entity queue";
   const jPhrase = jurisdictionGuidancePhrase();
   const search = filterState.search.trim();
-  if (!allLeads.length) {
+  if (!queueScopedLeads(allLeads).length) {
     el.textContent = "";
     return;
   }
   if (n === 0) {
     el.textContent = search
-      ? `No ${modePhrase} leads match “${search}”${jPhrase} — try All Leads.`
-      : `No leads in ${modePhrase} (score ≥${min})${jPhrase} — try All Leads.`;
+      ? `No ${modePhrase} candidates match “${search}”${jPhrase} — try Candidate Entities.`
+      : `No candidates in ${modePhrase} (score ≥${min})${jPhrase} — try Candidate Entities.`;
     return;
   }
   const scoreNote = filterState.viewMode === "all" ? "all scores" : `score ≥${min}`;
   el.textContent = search
-    ? `Showing ${n} ${modePhrase} matching “${search}” (${scoreNote})${jPhrase}`
+    ? `Showing ${n} ${modePhrase} candidates matching “${search}” (${scoreNote})${jPhrase}`
     : `Showing ${n} in ${modePhrase} (${scoreNote})${jPhrase} · sorted by score`;
 }
 
@@ -717,7 +855,7 @@ function setSelectedDate(date) {
   fetchLeads(false);
 }
 
-function showFieldSaved(anchorEl, success = true) {
+function showFieldSaved(anchorEl, success = true, fadeMs = 3000) {
   if (!anchorEl) return;
   const wrap = anchorEl.closest(".field-with-save") || anchorEl.parentElement;
   let indicator = wrap.querySelector(".save-feedback");
@@ -726,14 +864,14 @@ function showFieldSaved(anchorEl, success = true) {
     indicator.className = "save-feedback";
     anchorEl.insertAdjacentElement("afterend", indicator);
   }
-  indicator.textContent = success ? "Saved ✓" : "Save failed ✗";
+  indicator.textContent = success ? "Saved" : "Save failed";
   indicator.classList.toggle("save-ok", success);
   indicator.classList.toggle("save-fail", !success);
   clearTimeout(indicator._t);
   indicator._t = setTimeout(() => {
     indicator.textContent = "";
     indicator.classList.remove("save-ok", "save-fail");
-  }, 3000);
+  }, fadeMs);
 }
 
 function countUkMu(rows) {
@@ -751,12 +889,16 @@ function setPanelSubtitle(text) {
   if (!el) return;
   const msg = text || "";
   el.textContent = msg;
-  el.hidden = !msg;
+  el.hidden = false;
+  el.style.visibility = msg ? "visible" : "hidden";
 }
 
 function renderQueueZeroState() {
   renderQueueHero({ incorporation_date: getCurrentDate() || null });
+  renderExecutiveQuickBar();
   setPanelSubtitle(appHasDates ? "" : "No snapshot data in this environment");
+  const notice = $("#mauritiusMissingNotice");
+  if (notice) notice.hidden = true;
   updateTabGuidance();
 }
 
@@ -764,11 +906,27 @@ function renderMetricsZeroState() {
   renderQueueZeroState();
 }
 
+function updateMauritiusNotice(payload) {
+  const notice = $("#mauritiusMissingNotice");
+  const text = $("#mauritiusMissingText");
+  if (!notice || !text) return;
+  const missing = !!payload?.meta?.mauritius_export_missing;
+  const ukCount = Number(payload?.metrics?.uk_count) || 0;
+  if (missing && ukCount > 0) {
+    text.textContent = isProductionMode
+      ? "This prepared snapshot has no Mauritius GBC/AC companies. United Kingdom leads are still available. Contact operations if you expected Mauritius rows for this date."
+      : "This prepared snapshot has no Mauritius GBC/AC companies yet. United Kingdom leads are still available. Operations can add Mauritius rows via the overnight pipeline.";
+    notice.hidden = false;
+  } else {
+    notice.hidden = true;
+  }
+}
+
 function renderQueue(payload) {
   renderQueueHero(payload);
+  renderExecutiveQuickBar();
   setPanelSubtitle("");
-  const notice = $("#mauritiusMissingNotice");
-  if (notice) notice.hidden = true;
+  updateMauritiusNotice(payload);
   updateTabGuidance();
 }
 
@@ -778,7 +936,7 @@ function renderMetrics(payload) {
 
 function renderQueueFromFiltered() {
   if (!lastPayload) return;
-  const filtered = getFilteredLeads();
+  const filtered = queueScopedLeads(getFilteredLeads());
   const { uk, mu } = countUkMu(filtered);
   renderQueueHero({
     ...lastPayload,
@@ -876,7 +1034,7 @@ function exportAgeHours(iso) {
   }
 }
 
-const TRUST_STALE_HOURS = 30;
+const TRUST_STALE_HOURS = 36;
 
 function renderTrustStrip(statusData) {
   const el = $("#trustStripInner");
@@ -894,6 +1052,14 @@ function renderTrustStrip(statusData) {
   const inView = filtered.length || loaded?.count || 0;
   const filterNote = activeFilterSummary();
   const generatedIso = uk.file_modified || mu.file_modified;
+  const sourceLabel =
+    uk.exists && mu.exists
+      ? "Source: Companies House registry and Mauritius registry export"
+      : uk.exists
+        ? "Source: Companies House registry"
+        : mu.exists
+          ? "Source: Mauritius registry export"
+          : "Source: No prepared registry source available";
 
   let health = "healthy";
   let healthLabel = "Healthy";
@@ -927,6 +1093,8 @@ function renderTrustStrip(statusData) {
   el.innerHTML = `
     <span class="trust-strip__item trust-strip__item--snapshot">Snapshot: <strong>${escapeHtml(snapshotLabel)}</strong> · Generated ${formatTrustGenerated(generatedIso)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
+    <span class="trust-strip__item trust-strip__item--source">${escapeHtml(sourceLabel)}</span>
+    <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item">UK: <strong>Updated ${formatTrustUtc(uk.file_modified)}</strong> · ${ukCount} leads</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item">Mauritius: <strong>Updated ${formatTrustUtc(mu.file_modified)}</strong> · ${muCount} leads</span>
@@ -957,7 +1125,7 @@ function showQueueLoadError(message) {
   if (!el) return;
   el.hidden = false;
   el.innerHTML = `<p><strong>Unable to load snapshot data.</strong> ${escapeHtml(
-    message || "Please retry or contact operations."
+    operatorSafeErrorMessage(message)
   )}</p>`;
 }
 
@@ -980,8 +1148,8 @@ function renderTableStateCell(title, text, actionsHtml = "") {
 
 function showTableLoadingState() {
   renderTableStateCell(
-    "Loading incorporation records…",
-    "Retrieving prepared snapshot for the selected date."
+    "Loading prepared snapshot…",
+    "Loading prepared snapshot for the selected date."
   );
 }
 
@@ -989,18 +1157,19 @@ function showTableQuietDayState() {
   const dateLabel = formatDisplayDate(getCurrentDate());
   renderTableStateCell(
     "Quiet day",
-    `The ${dateLabel} snapshot exists but has no direct-client leads in this queue.`
+    `The ${dateLabel} snapshot exists but has no candidate entities in this queue.`
   );
 }
 
 function showTableErrorState() {
   renderTableStateCell(
     "Unable to load snapshot data",
-    "Please retry or contact operations if this continues."
+    "Select another snapshot date or contact operations."
   );
 }
 
 function showTableEmptyState() {
+  const body = $("#leadsBody");
   const date = getCurrentDate();
   const detail = dateDetail(date);
   const canLoad =
@@ -1016,24 +1185,30 @@ function showTableEmptyState() {
   let secondaryLink = "";
   if (!appHasDates && !date) {
     text =
-      "No incorporation snapshots are available yet. Contact operations if you expected yesterday's queue.";
+      "The overnight pipeline has not yet produced a snapshot for review.";
+    if (!isProductionMode) {
+      text +=
+        " Run the ingestion pipeline or place a prepared export in exports/YYYY-MM-DD.csv.";
+    }
   } else if (isProductionMode) {
     text =
-      "Try another date using the date menu. If you expected yesterday's queue, contact operations.";
+      "The overnight pipeline has not yet produced a snapshot for this date. Try another date or contact operations.";
   } else if (canLoad) {
-    text = "Use the date menu to pick another day, or load UK register data for this date.";
+    text =
+      "The overnight pipeline has not yet produced a snapshot for this date. Use the date menu to pick another day, or load UK register data for this date.";
     primaryBtn = `<button type="button" class="btn btn-primary" id="emptyRefreshData">Load UK data for this date</button>`;
     secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
   } else {
-    text = "Choose another date, refresh register data, or run the daily pipeline for this environment.";
-    primaryBtn = `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Refresh register data</button>`;
+    text =
+      "The overnight pipeline has not yet produced a snapshot for this date. Run the ingestion pipeline or place a prepared export in exports/YYYY-MM-DD.csv.";
+    primaryBtn = `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Build snapshot (dev)</button>`;
     secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
   }
 
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state">
       <span class="table-empty-state__mark" aria-hidden="true">A</span>
-      <p class="brand-eyebrow table-empty-state__eyebrow">Corporate Leads Intelligence</p>
+      <p class="brand-eyebrow table-empty-state__eyebrow">Onboarding Intelligence Platform</p>
       <h3 class="table-empty-state__title">${title}</h3>
       <p class="table-empty-state__text">${text}</p>
       <div class="table-empty-state__actions">
@@ -1097,10 +1272,9 @@ async function fetchDataStatus() {
     return;
   }
   const date = getCurrentDate() || todayISO();
-  const demo = isDemoCapEnabled();
   try {
     const res = await fetch(
-      `/api/data-status?date=${encodeURIComponent(date)}&demo=${demo}`
+      `/api/data-status?date=${encodeURIComponent(date)}`
     );
     if (!res.ok) {
       if (!appHasDates && !hasQueue) renderNoEnvironmentDataBanner();
@@ -1123,7 +1297,7 @@ async function fetchDataStatus() {
 function tierFromScore(score) {
   const s = Number(score) || 0;
   if (s >= SCORE_TIERS.high) return { key: "a", label: "High priority" };
-  if (s >= SCORE_TIERS.strong) return { key: "b", label: "Evaluate soon" };
+  if (s >= SCORE_TIERS.strong) return { key: "b", label: "High Relevance" };
   return { key: "c", label: "Monitor" };
 }
 
@@ -1222,24 +1396,73 @@ function formatSicBullet(lead) {
   return `SIC ${code} on registry`;
 }
 
+function formatIncorporationBullet(lead) {
+  const dateText = (lead.incorporation_date || "").trim();
+  if (!dateText) return "";
+  return `Date of incorporation: ${dateText}`;
+}
+
+function formatRegistryIdBullet(lead) {
+  const companyNo = (lead.company_number || "").trim();
+  if (companyNo) return `Company number: ${companyNo}`;
+  const fileNo = (lead.file_no || "").trim();
+  if (fileNo) return `File number: ${fileNo}`;
+  return "";
+}
+
+function formatEntityTypeBullet(lead) {
+  const j = (lead.jurisdiction || "").trim();
+  const entity = formatEntityTypeLabel(lead.entity_type, j);
+  if (!entity) return "";
+  return `Type of company: ${entity}`;
+}
+
+function formatLocationBullet(lead) {
+  const j = (lead.jurisdiction || "").trim();
+  if (!j) return "";
+  if (j === "UK") return "Location: United Kingdom";
+  return `Location: ${j}`;
+}
+
+function normalizeInfoText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isDuplicateMetaBullet(lead, bullet) {
+  const meta = companyMetaLine(lead);
+  const bulletNorm = normalizeInfoText(bullet);
+  const metaNorm = normalizeInfoText(meta);
+  if (!bulletNorm || !metaNorm) return false;
+
+  const companyBits = meta
+    .split("·")
+    .map((part) => normalizeInfoText(part))
+    .filter(Boolean);
+
+  if (bulletNorm === metaNorm) return true;
+  if (companyBits.length >= 2 && bulletNorm === `${companyBits[0]} ${companyBits[1]}`) return true;
+  if (companyBits.some((part) => part === bulletNorm)) return true;
+  return false;
+}
+
 function intelligenceTableBullets(lead) {
-  const server = lead.table_intelligence_bullets;
-  if (Array.isArray(server) && server.length) return server.slice(0, 3);
-  const bullets = [];
+  const bullets = [
+    formatIncorporationBullet(lead),
+    formatEntityTypeBullet(lead),
+    formatLocationBullet(lead),
+  ].filter(Boolean);
+
+  if (bullets.length) return bullets.slice(0, 3);
+
+  const fallback = [];
+  const registryId = formatRegistryIdBullet(lead);
+  if (registryId) fallback.push(registryId);
   const sic = formatSicBullet(lead);
-  if (sic) bullets.push(sic);
-  for (const s of (lead.intelligence_signals || []).slice(0, 3)) {
-    if (s && !bullets.includes(s)) bullets.push(s);
-  }
-  if (bullets.length < 3) {
-    for (const f of lead.registry_facts || []) {
-      if (bullets.length >= 3) break;
-      if (f.startsWith("Incorporated") && !bullets.some((b) => b.includes("Incorporated"))) {
-        bullets.push(f.replace(" (registry date)", ""));
-      }
-    }
-  }
-  return bullets.slice(0, 3);
+  if (sic) fallback.push(sic);
+  return fallback.slice(0, 2);
 }
 
 function intelligenceNarrative(lead) {
@@ -1249,7 +1472,7 @@ function intelligenceNarrative(lead) {
     lead.why_summary ||
     ""
   ).trim();
-  if (raw.includes(" · ") && /priority outreach|worth a call/i.test(raw)) {
+  if (raw.includes(" · ") && /priority review|worth a review/i.test(raw)) {
     const facts = (lead.registry_facts || []).filter(Boolean);
     if (facts.length) return facts.slice(0, 2).join(". ") + (facts.length ? "." : "");
     return companyMetaLine(lead);
@@ -1284,7 +1507,6 @@ function companyCell(lead) {
     <div class="company-cell__head">
       <span class="company-name" title="${escapeHtml(fullName)}">${escapeHtml(displayName)}</span>
     </div>
-    <span class="company-sub">${escapeHtml(companyMetaLine(lead))}</span>
   </div>`;
 }
 
@@ -1368,30 +1590,107 @@ function updateSortHeaders() {
   });
 }
 
-function suggestedOwnerDisplayName(lead) {
-  const name = (lead?.assigned_to || "").trim();
-  if (name) return name;
-  const pool = poolMembersForTab();
-  return pool.length ? pool[0] : "—";
+function rmList(lead, queueView = activeQueueView) {
+  if (queueView === "introducers") return [...poolMembersForTab("introducers")];
+  return [...poolMembersForTab("direct_clients")];
 }
 
-function suggestedOwnerCell(lead) {
-  const name = suggestedOwnerDisplayName(lead);
-  return `<span class="owner-suggestion" title="Recommended coverage for triage — not saved as an assignment yet">
-    <span class="owner-suggestion__name">${escapeHtml(name)}</span>
-  </span>`;
+function assigneeOptions(lead, queueView = activeQueueView) {
+  const val = (lead?.assigned_to || "").trim();
+  const members = [...new Set(rmList(lead, queueView))];
+  let html = `<option value="">Unassigned</option>`;
+  for (const name of members) {
+    html += `<option value="${escapeHtml(name)}" ${val === name ? "selected" : ""}>${escapeHtml(name)}</option>`;
+  }
+  if (val && !members.includes(val)) {
+    html += `<option value="${escapeHtml(val)}" selected>${escapeHtml(val)}</option>`;
+  }
+  return html;
 }
 
-function assignedOptions(lead, selected) {
-  const val = selected ?? lead?.assigned_to ?? "";
-  const members = [...poolMembersForTab()];
-  if (val && !members.includes(val)) members.push(val);
-  return members
-    .map(
-      (t) =>
-        `<option value="${escapeHtml(t)}" ${val === t ? "selected" : ""}>${escapeHtml(t)}</option>`
-    )
-    .join("");
+function queueAssignFaceLabel(lead) {
+  return (lead?.assigned_to || "").trim() ? "Assigned" : "Assign";
+}
+
+function updateAssignPickerFace(sel) {
+  const picker = sel?.closest(".assign-picker");
+  if (!picker) return;
+  const face = picker.querySelector(".assign-picker__face");
+  if (!face) return;
+  const assigned = !!(sel.value || "").trim();
+  face.textContent = assigned ? "Assigned" : "Assign";
+  picker.classList.toggle("assign-picker--open", !assigned);
+}
+
+function showAssignSaved(anchorEl) {
+  const picker = anchorEl?.closest(".assign-picker");
+  if (!picker) return;
+  let indicator = picker.querySelector(".assign-save-indicator");
+  if (!indicator) {
+    indicator = document.createElement("span");
+    indicator.className = "assign-save-indicator";
+    picker.appendChild(indicator);
+  }
+  indicator.textContent = "Saved";
+  clearTimeout(indicator._t);
+  indicator._t = setTimeout(() => {
+    indicator.textContent = "";
+  }, 1500);
+}
+
+function assigneeSelectCell(lead, queueView = activeQueueView) {
+  const lid = leadKey(lead);
+  const face = queueAssignFaceLabel(lead);
+  const unassigned = !(lead?.assigned_to || "").trim();
+  return `<label class="assign-picker${unassigned ? " assign-picker--open" : ""}">
+    <span class="assign-picker__face">${escapeHtml(face)}</span>
+    <select class="assign-select assign-select--queue" data-lead-id="${escapeHtml(lid)}" aria-label="Assign ownership for ${escapeHtml(lead.company_name || "company")}">${assigneeOptions(lead, queueView)}</select>
+  </label>`;
+}
+
+function wireAssignSelects(root) {
+  const scope = root || document;
+  scope.querySelectorAll(".assign-select--queue").forEach((sel) => {
+    sel.addEventListener("click", (e) => e.stopPropagation());
+    sel.addEventListener("keydown", (e) => e.stopPropagation());
+    sel.addEventListener("change", (e) => {
+      e.stopPropagation();
+      updateAssignPickerFace(sel);
+      onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel);
+    });
+  });
+}
+
+function setQueueView(view) {
+  activeQueueView = view;
+  const isDirect = view === "direct_clients";
+  const directPanel = $("#directClientsView");
+  const introPanel = $("#introducersView");
+  const tabDirect = $("#tabDirect");
+  const tabIntro = $("#tabIntroducers");
+  const hero = document.querySelector(".decision-hero");
+  const tabs = document.querySelector(".queue-tabs");
+
+  if (directPanel) directPanel.hidden = !isDirect;
+  if (introPanel) introPanel.hidden = isDirect;
+  if (hero) hero.hidden = !isDirect;
+  if (tabs) tabs.hidden = false;
+
+  if (tabDirect) {
+    tabDirect.classList.toggle("active", isDirect);
+    tabDirect.setAttribute("aria-selected", isDirect ? "true" : "false");
+  }
+  if (tabIntro) {
+    tabIntro.classList.toggle("active", !isDirect);
+    tabIntro.setAttribute("aria-selected", !isDirect ? "true" : "false");
+  }
+
+  if (!isDirect && openLeadId) closeDetailPanel();
+  renderTable();
+  renderIntroducersView();
+  renderMetricsFromFiltered();
+  updateTabGuidance();
+  fetchLeads(false, true, view);
 }
 
 function renderTrustList(items, emptyText) {
@@ -1411,18 +1710,18 @@ function renderWhyContactHtml(lead) {
 
   return `
     <section class="intel-section trust-intel why-contact-section why-contact-section--featured">
-      <h3>Intelligence</h3>
-      <p class="trust-intel__intro muted">Registry facts are shown as recorded. Indicators and relevance lines are heuristic — verify on the source register.</p>
+      <h3>Signals summary</h3>
+      <p class="trust-intel__intro muted">Facts are Registry verified as recorded. Signals use an internal scoring model and should be validated on the source register.</p>
       <div class="trust-layer trust-layer--fact">
-        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--high">Registry facts</span></h4>
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--high">Registry facts</span> ${provenanceLabel("registry")}</h4>
         ${renderTrustList(facts, "No structured registry facts available for this row.")}
       </div>
       <div class="trust-layer trust-layer--signal">
-        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--medium">Intelligence signals</span></h4>
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--medium">Signals observed</span> ${provenanceLabel("heuristic")}</h4>
         ${renderTrustList(signals, "No name/SIC/age heuristics triggered beyond base registry data.")}
       </div>
       <div class="trust-layer trust-layer--interpret">
-        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--low">Why this may matter to ARIE</span></h4>
+        <h4 class="trust-layer__title"><span class="trust-layer__badge trust-layer__badge--low">Why this may matter to ARIE</span> ${provenanceLabel("heuristic")}</h4>
         ${renderTrustList(relevance, "No commercial interpretation generated — use registry facts and score breakdown only.")}
       </div>
       ${
@@ -1462,9 +1761,9 @@ function renderScoreBreakdownHtml(lead) {
 
   return `
     <section class="intel-section score-explainer">
-      <h3>Score breakdown <span class="score-explainer__total">${escapeHtml(String(bd.total))}</span></h3>
+      <h3>Score breakdown <span class="score-explainer__total">${escapeHtml(String(bd.total))}</span> ${provenanceLabel("heuristic")}</h3>
       <p class="score-explainer__summary muted">${escapeHtml(bd.summary || "")}</p>
-      <p class="score-explainer__priority">Score band: <strong>${escapeHtml(tierFromScore(lead.score).label)}</strong> (High priority ≥ ${SCORE_TIERS.high} · Evaluate soon ≥ ${SCORE_TIERS.strong})</p>
+      <p class="score-explainer__priority">Score band: <strong>${escapeHtml(tierFromScore(lead.score).label)}</strong> (High priority ≥ ${SCORE_TIERS.high} · High Relevance ≥ ${SCORE_TIERS.strong})</p>
       <ul class="score-components">${bars}</ul>
     </section>`;
 }
@@ -1499,17 +1798,85 @@ function notesCell(lead) {
   return `<button type="button" class="notes-indicator" data-lead-id="${escapeHtml(lid)}">Add note</button>`;
 }
 
+function introducerCategoryBadge(lead) {
+  const category = introducerCategoryFromName(lead.company_name || "");
+  const tone = category.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return `<span class="introducer-category introducer-category--${escapeHtml(tone)}">${escapeHtml(category)}</span>`;
+}
+
+function renderIntroducersView() {
+  const body = $("#introducersBody");
+  const insights = $("#introducerInsights");
+  if (!body || !insights) return;
+
+  const rows = sortLeads(queueScopedLeads(getFilteredLeads(), "introducers"));
+  const active = rows.filter((lead) => (lead.assigned_to || "").trim()).length;
+  const high = rows.filter((lead) => (Number(lead.score) || 0) >= SCORE_TIERS.high).length;
+  const registryVerified = rows.filter((lead) => (lead.verify_url || "").trim()).length;
+  const byCategory = rows.reduce((acc, lead) => {
+    const cat = introducerCategoryFromName(lead.company_name || "");
+    acc[cat] = (acc[cat] || 0) + 1;
+    return acc;
+  }, {});
+  const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0]?.[0] || "Legal / Advisory";
+
+  insights.innerHTML = `
+    <article class="insight-kpi"><p class="insight-kpi__label">Active Introducers</p><p class="insight-kpi__value">${active}</p></article>
+    <article class="insight-kpi"><p class="insight-kpi__label">New Introducer Candidates</p><p class="insight-kpi__value">${rows.length}</p></article>
+    <article class="insight-kpi"><p class="insight-kpi__label">High-Relevance Partners</p><p class="insight-kpi__value">${high}</p></article>
+    <article class="insight-kpi"><p class="insight-kpi__label">Verified Professional Firms</p><p class="insight-kpi__value">${registryVerified}</p><p class="insight-kpi__meta">Top profile: ${escapeHtml(topCategory)}</p></article>
+  `;
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state table-empty-state--inline"><h3 class="table-empty-state__title">No introducer candidates in this snapshot.</h3><p class="table-empty-state__text">Switch to Candidate Entities or choose another date.</p></div></td></tr>`;
+    return;
+  }
+
+  body.innerHTML = rows
+    .map((lead) => {
+      const lid = leadKey(lead);
+      const tierKey = tierFromScore(lead.score).key;
+      const label = escapeHtml(lead.company_name || "Company");
+      return `
+        <tr class="lead-row lead-row--tier-${tierKey}" data-lead-id="${escapeHtml(lid)}" role="button" tabindex="0" aria-label="Review ${label}">
+          <td>${companyCell(lead)}</td>
+          <td>${introducerCategoryBadge(lead)}</td>
+          <td>${tierBadge(lead.score)}</td>
+          <td class="assign-cell">${assigneeSelectCell(lead, "introducers")}</td>
+          <td class="col-chevron"><span class="row-open-label">Review</span></td>
+        </tr>`;
+    })
+    .join("");
+
+  wireAssignSelects(body);
+  body.querySelectorAll(".lead-row").forEach((row) => {
+    const open = () => openDetailPanel(row.dataset.leadId);
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("select, a, button")) return;
+      open();
+    });
+    row.addEventListener("keydown", (e) => {
+      if (e.target.closest("select, a, button, textarea")) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      }
+    });
+  });
+}
+
 function renderTable() {
   const body = $("#leadsBody");
-  if (!appHasDates && !allLeads.length) {
+  const queueRows = queueScopedLeads(allLeads);
+  if (!appHasDates && !queueRows.length) {
     showTableEmptyState();
     return;
   }
 
-  const filtered = sortLeads(getFilteredLeads());
+  const filtered = sortLeads(queueScopedLeads(getFilteredLeads()));
 
   if (!filtered.length) {
-    showFilteredEmptyState(allLeads.length > 0);
+    showFilteredEmptyState(queueRows.length > 0);
     updateExportButtonLabel();
     updateTablePanelSubtitle();
     return;
@@ -1526,11 +1893,13 @@ function renderTable() {
           <td>${companyCell(lead)}</td>
           <td>${scoreDecisionCell(lead.score)}</td>
           <td class="prospect-reason-cell">${whyContactCell(lead)}</td>
-          <td class="assign-cell">${suggestedOwnerCell(lead)}</td>
+          <td class="assign-cell">${assigneeSelectCell(lead, "direct_clients")}</td>
           <td class="col-chevron"><span class="row-open-label">Review</span></td>
         </tr>`;
     })
     .join("");
+
+  wireAssignSelects(body);
 
   body.querySelectorAll(".lead-row").forEach((row) => {
     const open = () => openDetailPanel(row.dataset.leadId);
@@ -1561,21 +1930,9 @@ function showFilteredEmptyState(hasLeadsInSnapshot) {
   }
   body.innerHTML = `<tr><td colspan="${TABLE_COLSPAN}" class="empty-state-cell">
     <div class="table-empty-state table-empty-state--inline">
-      <h3 class="table-empty-state__title">${escapeHtml(
-        filterState.search.trim()
-          ? "No leads match your search"
-          : filterState.viewMode === "strong"
-              ? "No strong leads for this snapshot"
-              : "No leads match current filters"
-      )}</h3>
-      <p class="table-empty-state__text">${escapeHtml(
-        filterState.search.trim()
-          ? `Nothing matches “${filterState.search.trim()}”. Try another term or switch to All Leads.`
-          : filterState.viewMode === "strong"
-            ? "Try All Leads to see the full queue for this date."
-            : "Try Evaluate Soon or clear your search."
-      )}</p>
-      <button type="button" class="btn btn-secondary" id="emptyViewAll">Show all leads</button>
+      <h3 class="table-empty-state__title">No candidate entities match the current filters.</h3>
+      <p class="table-empty-state__text">Try clearing search or jurisdiction filters.</p>
+      <button type="button" class="btn btn-secondary" id="emptyViewAll">Show candidate entities</button>
     </div>
   </td></tr>`;
   $("#emptyViewAll")?.addEventListener("click", () => applyViewMode("all"));
@@ -1584,7 +1941,11 @@ function showFilteredEmptyState(hasLeadsInSnapshot) {
 function updateTableScrollHint() {
   const wrap = document.querySelector(".table-wrap");
   if (!wrap) return;
-  wrap.classList.toggle("is-scrollable", wrap.scrollWidth > wrap.clientWidth + 2);
+  const canScrollX = wrap.scrollWidth > wrap.clientWidth + 2;
+  const canScrollY = wrap.scrollHeight > wrap.clientHeight + 2;
+  wrap.classList.toggle("is-scrollable", canScrollX || canScrollY);
+  wrap.classList.toggle("is-scrollable-y", canScrollY);
+  updateTablePanelSubtitle();
 }
 
 async function onAssign(leadId, patch, anchorEl) {
@@ -1601,15 +1962,28 @@ async function onAssign(leadId, patch, anchorEl) {
       body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error("Save failed");
-    showFieldSaved(anchorEl, true);
+    if (patch.assigned_to !== undefined) {
+      if (anchorEl?.classList?.contains("assign-select--queue")) {
+        showAssignSaved(anchorEl);
+      } else {
+        showFieldSaved(anchorEl, true, 1500);
+      }
+    } else {
+      showFieldSaved(anchorEl, true);
+    }
     if (detailLead && leadKey(detailLead) === leadId) {
       detailLead = { ...detailLead, ...patch };
+      if (patch.assigned_to !== undefined) {
+        const detailSel = $("#detailAssignee");
+        if (detailSel) detailSel.value = patch.assigned_to || "";
+      }
     }
     syncTableFromLead(lead);
   } catch {
     showFieldSaved(anchorEl, false);
-    showToast("Could not save — try again", true);
+    showToast("Could not save — contact operations if this continues", true);
   }
+  renderIntroducersView();
   renderMetricsFromFiltered();
 }
 
@@ -1617,13 +1991,19 @@ function syncTableFromLead(lead) {
   const lid = leadKey(lead);
   const row = document.querySelector(`tr[data-lead-id="${CSS.escape(lid)}"]`);
   if (!row) return;
+  const queueView = row.closest("#introducersView") ? "introducers" : "direct_clients";
   const ownerCell = row.querySelector(".assign-cell");
-  if (ownerCell) ownerCell.innerHTML = suggestedOwnerCell(lead);
+  if (ownerCell) {
+    ownerCell.innerHTML = assigneeSelectCell(lead, queueView);
+    wireAssignSelects(ownerCell);
+    const sel = ownerCell.querySelector(".assign-select--queue");
+    if (sel) updateAssignPickerFace(sel);
+  }
   const notesCellEl = row.querySelector(".notes-cell");
   if (notesCellEl) notesCellEl.innerHTML = notesCell(lead);
 }
 
-async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
+async function fetchMauritiusIfNeeded(payload, allowAuto = true, queueTab = activeQueueView) {
   if (
     !operatorRefreshAllowed ||
     !allowAuto ||
@@ -1635,9 +2015,9 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
   const date = getCurrentDate();
   if (!date) return payload;
 
-  setLoading(true, "Loading Mauritius register data…");
-  const demo = isDemoCapEnabled();
-  const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
+  setLoading(true, "Loading Mauritius snapshot…");
+  const normalizedTab = queueTab || DEFAULT_QUEUE_TAB;
+  const base = `incorporation_date=${encodeURIComponent(date)}&tab=${encodeURIComponent(normalizedTab)}`;
   try {
     const res = await fetch(`/api/refresh/mauritius?${base}`, { method: "POST" });
     if (!res.ok) {
@@ -1647,7 +2027,7 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
     }
     const updated = await res.json();
     await loadAvailableDates();
-    showToast(`Mauritius register loaded — ${updated.count} leads in view`);
+    showToast(`Mauritius register loaded — ${updated.count} candidates in view`);
     return updated;
   } catch {
     showToast("Mauritius data could not be loaded for this date", true);
@@ -1657,7 +2037,7 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true) {
   }
 }
 
-async function fetchLeads(refresh = false, allowAutoFetch = true) {
+async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = activeQueueView) {
   if (refresh && !operatorRefreshAllowed) {
     showToast(
       "Register data is prepared overnight. Try another date or contact operations.",
@@ -1666,7 +2046,6 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     return;
   }
   const date = getCurrentDate();
-  const demo = isDemoCapEnabled();
   if (!date) {
     renderMetricsZeroState();
     showTableEmptyState();
@@ -1674,9 +2053,10 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     return;
   }
   hideQueueLoadError();
-  setLoading(true, refresh ? "Retrieving UK register data…" : "Loading incorporation records…");
+  setLoading(true, refresh ? "Building snapshot from registry…" : "Loading prepared snapshot…");
   showTableLoadingState();
-  const base = `incorporation_date=${encodeURIComponent(date)}&demo=${demo}&tab=${encodeURIComponent(QUEUE_TAB)}`;
+  const normalizedTab = queueTab || DEFAULT_QUEUE_TAB;
+  const base = `incorporation_date=${encodeURIComponent(date)}&tab=${encodeURIComponent(normalizedTab)}`;
   const url = `/api/${refresh ? "refresh" : "leads"}?${base}`;
   try {
     let res = await fetch(url, { method: refresh ? "POST" : "GET" });
@@ -1695,7 +2075,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     ) {
       const detail = dateDetail(date);
       if (!detail.has_snapshot && !detail.has_data) {
-        return fetchLeads(true, false);
+        return fetchLeads(true, false, normalizedTab);
       }
     }
     if (!res.ok) {
@@ -1703,7 +2083,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
       throw new Error(err.detail || res.statusText);
     }
     let data = await res.json();
-    data = await fetchMauritiusIfNeeded(data, allowAutoFetch);
+    data = await fetchMauritiusIfNeeded(data, allowAutoFetch, normalizedTab);
     lastPayload = data;
     allLeads = data.leads || [];
     upsertDateDetailFromPayload(data);
@@ -1728,15 +2108,21 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
     } else {
       renderTable();
     }
+    renderIntroducersView();
+    renderMetricsFromFiltered();
     renderTrustStrip(lastDataStatus);
     if (openLeadId) {
       const still = allLeads.find((l) => leadKey(l) === openLeadId);
       if (still) openDetailPanel(openLeadId, true);
       else closeDetailPanel();
     }
-    showToast(refresh ? `Refreshed — ${data.count} leads in view` : `Loaded ${data.count} leads`);
+    showToast(
+      refresh
+        ? `Snapshot updated — ${data.count} candidates in view`
+        : `Prepared snapshot loaded — ${data.count} candidates`
+    );
   } catch (e) {
-    const msg = e.message || "Failed to load";
+    const msg = operatorSafeErrorMessage(e.message);
     showToast(msg, true);
     showQueueLoadError(msg);
     allLeads = [];
@@ -1751,8 +2137,18 @@ async function fetchLeads(refresh = false, allowAutoFetch = true) {
   }
 }
 
+const EXPORT_PLACEHOLDERS = new Set(["", "—", "\u2014", "Pending enrichment"]);
+
+function exportFieldValue(v) {
+  let raw = Array.isArray(v) ? v.join(" | ") : v;
+  const s = String(raw ?? "").trim();
+  if (EXPORT_PLACEHOLDERS.has(s)) return "";
+  if (/pending enrichment/i.test(s)) return "";
+  return s;
+}
+
 function exportCsv() {
-  const rows = sortLeads(getFilteredLeads());
+  const rows = sortLeads(queueScopedLeads(getFilteredLeads()));
   const btn = $("#exportBtn");
   if (btn?.disabled) return;
   if (btn) {
@@ -1764,36 +2160,49 @@ function exportCsv() {
     showToast("Nothing to export for the current filters", true);
     return;
   }
+  const snapshotDate = getCurrentDate() || "";
   const headers = [
+    "snapshot_date",
+    "incorporation_date",
     "company_name",
     "jurisdiction",
     "entity_type",
     "score",
     "priority",
-    "strategic_hint",
-    "intelligence_summary",
+    "lead_id",
+    "company_number",
+    "file_no",
+    "source",
+    "verify_url",
+    "assigned_to",
+    "status",
+    "notes",
     "registry_facts",
     "intelligence_signals",
     "arie_relevance",
+    "intelligence_summary",
+    "strategic_hint",
     "prospect_reason",
-    "incorporation_date",
-    "assigned_to",
-    "notes",
-    "lead_id",
-    "source",
   ];
   const esc = (v) => {
-    const raw = Array.isArray(v) ? v.join(" | ") : v;
-    return `"${String(raw ?? "").replace(/"/g, '""')}"`;
+    const cleaned = exportFieldValue(v);
+    return `"${cleaned.replace(/"/g, '""')}"`;
   };
-  const lines = [headers.join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))];
+  const lines = [
+    headers.join(","),
+    ...rows.map((r) =>
+      headers
+        .map((h) => (h === "snapshot_date" ? esc(snapshotDate) : esc(r[h])))
+        .join(",")
+    ),
+  ];
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `arie_leads_${getCurrentDate() || "export"}_${exportScopeSlug()}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
-  showToast(`Exported ${rows.length} filtered lead${rows.length === 1 ? "" : "s"}`);
+  showToast(`Exported ${rows.length} filtered candidate${rows.length === 1 ? "" : "s"}`);
   updateExportButtonLabel();
 }
 
@@ -1833,7 +2242,7 @@ function openDetailPanel(leadId, skipAnim = false) {
   document.body.style.overflow = "hidden";
   $$(".lead-row").forEach((r) => r.classList.toggle("selected", r.dataset.leadId === leadId));
 
-  $("#detailCompanyName").textContent = "Lead profile";
+  $("#detailCompanyName").textContent = "Candidate Entity Profile";
   renderDetailShell(lead);
   $("#detailBackdrop").hidden = false;
   $("#detailPanel").hidden = false;
@@ -1874,10 +2283,24 @@ function verifyLabel(lead) {
   return isMauritiusLead(lead) ? "MNS Registry" : "Companies House";
 }
 
+function normalizePanelStatus(status) {
+  const raw = (status || "").trim();
+  if (!raw) return "Monitor";
+  const map = {
+    "Not contacted": "Monitor",
+    Contacted: "Monitor",
+    "Follow-up": "Monitor",
+    Interested: "High Relevance",
+    Onboarding: "High Relevance",
+    "Not fit": "Not Relevant",
+  };
+  return map[raw] || (PANEL_STATUSES.includes(raw) ? raw : "Monitor");
+}
+
 function renderDetailShell(lead) {
   const addr = (lead.registered_address || lead.address || "").trim();
   const verifyUrl = (lead.verify_url || "").trim();
-  const statusVal = lead.status || "New";
+  const statusVal = normalizePanelStatus(lead.status);
   const statusOpts = PANEL_STATUSES.map(
     (s) => `<option value="${escapeHtml(s)}" ${statusVal === s ? "selected" : ""}>${escapeHtml(s)}</option>`
   ).join("");
@@ -1885,7 +2308,7 @@ function renderDetailShell(lead) {
   $("#detailBody").innerHTML = `
     <section class="intel-section detail-company-header">
       <h3 class="detail-company-title">${escapeHtml(lead.company_name)}</h3>
-      <p id="detailSummary" class="detail-summary muted">${escapeHtml(companyMetaLine(lead))} · Rule-based score ${Number(lead.score) || 0}</p>
+      <p id="detailSummary" class="detail-summary muted">${escapeHtml(companyMetaLine(lead))} · ${provenanceLabel("heuristic")} · ${Number(lead.score) || 0}</p>
       <div class="lead-card-meta">
         ${tierBadge(lead.score)}
         <span class="jurisdiction-badge">${escapeHtml(lead.jurisdiction || "—")}</span>
@@ -1896,8 +2319,8 @@ function renderDetailShell(lead) {
       ${addr ? `<p class="detail-meta-line"><strong>Registered address:</strong> ${escapeHtml(addr)}</p>` : ""}
       ${
         verifyUrl
-          ? `<a class="btn btn-verify btn-block" href="${escapeHtml(verifyUrl)}" target="_blank" rel="noopener">Verify on ${escapeHtml(verifyLabel(lead))}</a>`
-          : ""
+          ? `<a class="btn btn-verify btn-block" href="${escapeHtml(verifyUrl)}" target="_blank" rel="noopener">Verify on ${escapeHtml(verifyLabel(lead))}</a> ${provenanceLabel("registry")}`
+          : provenanceLabel("unavailable")
       }
     </section>
 
@@ -1907,21 +2330,21 @@ function renderDetailShell(lead) {
 
     <section class="intel-section" id="detailOfficersSection">
       <h3>Directors &amp; Officers</h3>
-      <p class="muted">Retrieving registry officers…</p>
+      <p class="muted">Loading registry officers…</p>
     </section>
 
     <section class="intel-section" id="detailPscSection">
       <h3>Persons with Significant Control</h3>
-      <p class="muted">Retrieving PSC records…</p>
+      <p class="muted">Loading PSC records…</p>
     </section>
 
     <section class="intel-section">
-      <h3>Notes &amp; status</h3>
-      <div class="detail-field">
-        <span class="detail-field__label">Recommended RM</span>
-        ${suggestedOwnerCell(lead)}
-        <p class="owner-suggestion__note">For triage only — not saved as an assignment until claim is available.</p>
-      </div>
+      <h3>Notes &amp; review status</h3>
+      <label class="detail-field field-with-save">
+        <span class="detail-field__label">Assigned RM</span>
+        <select id="detailAssignee" class="detail-select assign-select" data-lead-id="${escapeHtml(leadKey(lead))}" aria-label="Assign relationship manager">${assigneeOptions(lead)}</select>
+        <p class="owner-suggestion__note muted">Internal workflow ownership only.</p>
+      </label>
       <label class="detail-field field-with-save">
         <span>Notes</span>
         <textarea id="detailNotes" class="notes-area" rows="3" placeholder="Add note…">${escapeHtml(lead.notes || "")}</textarea>
@@ -1933,11 +2356,15 @@ function renderDetailShell(lead) {
     </section>
 
     <section class="intel-section" id="detailBriefSection">
-      <h3>AI Brief</h3>
+      <h3>AI Brief ${provenanceLabel("ai")}</h3>
+      <p class="muted brief-disclaimer">AI-generated summary — verify Registry verified sources before review.</p>
       <div id="detailBriefContent"></div>
     </section>
   `;
 
+  $("#detailAssignee")?.addEventListener("change", (e) =>
+    onAssign(leadKey(lead), { assigned_to: e.target.value }, e.target)
+  );
   $("#detailNotes").addEventListener("blur", (e) =>
     onAssign(leadKey(lead), { notes: e.target.value }, e.target)
   );
@@ -1967,24 +2394,24 @@ async function loadDetailPeople(lead, options = {}) {
   const { refresh = false } = options;
   const lid = leadKey(lead);
   const date = getCurrentDate();
-  const demo = isDemoCapEnabled();
   const officersEl = $("#detailOfficersSection");
   const pscEl = $("#detailPscSection");
 
   if (isMauritiusLead(lead)) {
     const info = renderEnrichmentInfoBox(MU_DIRECTOR_MSG);
-    officersEl.innerHTML = `<h3>Directors &amp; Officers</h3>${info}`;
-    pscEl.innerHTML = `<h3>Persons with Significant Control</h3>${info}`;
+    const unavailable = provenanceLabel("unavailable");
+    officersEl.innerHTML = `<h3>Directors &amp; Officers ${unavailable}</h3>${info}`;
+    pscEl.innerHTML = `<h3>Persons with Significant Control ${unavailable}</h3>${info}`;
     return;
   }
 
-  officersEl.innerHTML = `<h3>Directors &amp; Officers</h3><p class="muted">Retrieving registry officers…</p>`;
-  pscEl.innerHTML = `<h3>Persons with Significant Control</h3><p class="muted">Retrieving PSC records…</p>`;
+  officersEl.innerHTML = `<h3>Directors &amp; Officers ${provenanceLabel("registry")}</h3><p class="muted">Loading registry officers…</p>`;
+  pscEl.innerHTML = `<h3>Persons with Significant Control ${provenanceLabel("registry")}</h3><p class="muted">Loading PSC records…</p>`;
 
   try {
     const refreshParam = refresh ? "&refresh=true" : "";
     const res = await fetch(
-      `/api/leads/${encodeURIComponent(lid)}/people?incorporation_date=${encodeURIComponent(date)}&demo=${demo}${refreshParam}`
+      `/api/leads/${encodeURIComponent(lid)}/people?incorporation_date=${encodeURIComponent(date)}${refreshParam}`
     );
     const data = await res.json().catch(() => ({}));
 
@@ -2096,7 +2523,7 @@ async function generateBrief() {
   btn.textContent = "Generating…";
   try {
     const res = await fetch(
-      `/api/leads/${encodeURIComponent(lid)}/brief?incorporation_date=${encodeURIComponent(getCurrentDate())}&demo=${isDemoCapEnabled()}`,
+      `/api/leads/${encodeURIComponent(lid)}/brief?incorporation_date=${encodeURIComponent(getCurrentDate())}`,
       { method: "POST" }
     );
     if (!res.ok) throw new Error("Brief failed");
@@ -2145,21 +2572,12 @@ function showWrongOpenModeBanner() {
 function init() {
   applyEnvBadgeFallback();
   showWrongOpenModeBanner();
+  renderProvenancePanel();
   $("#reviewHighPriorityBtn")?.addEventListener("click", scrollToLeadQueue);
   $("#refreshBtn")?.addEventListener("click", () => fetchLeads(true));
-  $("#demoMode")?.addEventListener("change", async () => {
-    const demoBox = $("#demoMode");
-    if (demoBox) demoBox.dataset.userTouched = "1";
-    await loadAvailableDates();
-    fetchDataStatus();
-    if (!appHasDates) {
-      renderMetricsZeroState();
-      showTableEmptyState();
-      return;
-    }
-    fetchLeads(false);
-  });
   $("#exportBtn")?.addEventListener("click", exportCsv);
+  $("#tabDirect")?.addEventListener("click", () => setQueueView("direct_clients"));
+  $("#tabIntroducers")?.addEventListener("click", () => setQueueView("introducers"));
 
   $("#datePrev").addEventListener("click", () => navigateDate(-1));
   $("#dateNext").addEventListener("click", () => navigateDate(1));
@@ -2192,6 +2610,9 @@ function init() {
   });
   $("#filterSearch")?.addEventListener("input", rerenderFromDom);
   $("#jurisdictionFilter")?.addEventListener("change", rerenderFromDom);
+  document.querySelectorAll(".ui-mode-switch__btn[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => setUiViewMode(btn.dataset.mode));
+  });
 
   $$("th.sortable").forEach((th) => {
     th.addEventListener("click", () => {
@@ -2208,6 +2629,7 @@ function init() {
 
   applyScoreTierLabels();
   applyFilterStateToDom();
+  applyUiViewModeToDom();
 
   const header = $(".header");
   const tableWrap = document.querySelector(".table-wrap");

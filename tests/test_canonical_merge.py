@@ -1,6 +1,8 @@
 """PR1: operator queue must reflect exports/{date}.csv only."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -39,7 +41,7 @@ def test_merge_uk_and_mauritius_from_pipeline_only(exports_dir):
         encoding="utf-8",
     )
 
-    rows, meta = merge_leads_for_date("2026-05-20", demo=True)
+    rows, meta = merge_leads_for_date("2026-05-20")
 
     assert meta["uk_count"] == 2
     assert meta["mauritius_count"] == 1
@@ -52,7 +54,7 @@ def test_merge_uk_and_mauritius_from_pipeline_only(exports_dir):
 
 
 def test_merge_empty_when_pipeline_missing(exports_dir):
-    rows, meta = merge_leads_for_date("2099-01-01", demo=False)
+    rows, meta = merge_leads_for_date("2099-01-01")
     assert rows == []
     assert meta["uk_count"] == 0
     assert meta["mauritius_count"] == 0
@@ -77,7 +79,7 @@ def test_date_scan_counts_match_pipeline(exports_dir):
         + "MU Co,mu co,Mauritius,GLOBAL BUSINESS COMPANY,2026-05-15,60,mauritius_mns,,F1,\n",
         encoding="utf-8",
     )
-    result = scan_available_dates(demo=True, lookback_days=7)
+    result = scan_available_dates(lookback_days=7)
     by_date = {d["date"]: d for d in result["date_details"]}
     detail = by_date["2026-05-15"]
     assert detail["uk_count"] == 1
@@ -113,6 +115,52 @@ def test_api_leads_returns_uk_from_pipeline(exports_dir, monkeypatch):
     assert payload["leads"][0]["company_number"] == "17221824"
 
 
+def test_refresh_writes_canonical_export_and_queue_reads_it(exports_dir, monkeypatch):
+    """Dev UK refresh must write exports/{date}.csv and the queue must read the same rows."""
+    from uk_leads.uk_snapshot import refresh_uk_for_date
+
+    fake_uk = [
+        {
+            "company_name": "Refresh Co Ltd",
+            "company_number": "88888888",
+            "incorporation_date": "2026-05-24",
+            "jurisdiction": "UK",
+            "entity_type": "ltd",
+            "sic_codes": "64209",
+            "score": 72,
+            "source": "companies_house",
+        }
+    ]
+
+    def _fake_fetch(_from, _to, min_score=None, top=None):
+        return fake_uk, 1
+
+    monkeypatch.setattr(
+        "uk_leads.uk_snapshot.fetch_uk_leads",
+        _fake_fetch,
+    )
+
+    result = refresh_uk_for_date("2026-05-24")
+    path = exports_dir / "2026-05-24.csv"
+    assert path.exists()
+    assert Path(result["path"]).name == path.name
+
+    rows, meta = merge_leads_for_date("2026-05-24")
+    assert meta["uk_count"] == 1
+    assert rows[0]["company_name"] == "Refresh Co Ltd"
+    assert rows[0]["company_number"] == "88888888"
+    assert "website_domain" not in rows[0]
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/leads",
+        params={"incorporation_date": "2026-05-24", "tab": "direct_clients"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leads"][0]["company_number"] == "88888888"
+
+
 def test_uk_leads_snapshot_files_ignored(exports_dir):
     """uk-leads-demo must not populate the operator queue when pipeline lacks UK."""
     exports_dir.joinpath("2026-05-23.csv").write_text(
@@ -130,7 +178,7 @@ def test_uk_leads_snapshot_files_ignored(exports_dir):
         encoding="utf-8",
     )
 
-    rows, meta = merge_leads_for_date("2026-05-23", demo=True)
+    rows, meta = merge_leads_for_date("2026-05-23")
     assert meta["uk_count"] == 0
     assert meta["mauritius_count"] == 1
     assert all(r.get("jurisdiction") != "UK" or r.get("source") != "companies_house" for r in rows)

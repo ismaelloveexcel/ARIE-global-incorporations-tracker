@@ -116,7 +116,7 @@ def classify_lead_type(company_name: str) -> tuple[str, str]:
             label = pat.replace(r"\b", "").replace("\\", "")
             return "direct", f"Name suggests financial / fintech activity ({label.strip()})"
 
-    return "direct", "Default: newly incorporated UK company (direct outreach)"
+    return "direct", "Default: newly incorporated UK company (registration review)"
 
 
 def is_fintech_payment_lead(company_name: str, sic_codes: str) -> bool:
@@ -129,26 +129,6 @@ def is_fintech_payment_lead(company_name: str, sic_codes: str) -> bool:
             if part.strip().startswith(prefix):
                 return True
     return False
-
-
-def probable_website_domain(company_name: str) -> tuple[str, str]:
-    """
-    Returns (domain_guess, domain_confidence).
-    Heuristic only — not verified. Empty if too uncertain.
-    """
-    name = company_name or ""
-    # Strip legal suffixes
-    cleaned = re.sub(
-        r"\b(ltd|limited|llp|plc|inc|corp|co|uk)\b\.?",
-        "",
-        name,
-        flags=re.IGNORECASE,
-    )
-    slug = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
-    if len(slug) < 4 or len(slug) > 40:
-        return "", "low"
-    domain = f"{slug}.co.uk"
-    return domain, "low"
 
 
 def incorporation_age(incorporation_date: str | None, reference: date | None = None) -> tuple[str, int | None]:
@@ -512,10 +492,6 @@ def enrich_row(row: dict[str, Any], raw_data: dict[str, Any] | None = None) -> d
 
     row["priority"] = priority_from_score(score_f)
     row["verify_url"] = ensure_verify_url(row)
-
-    domain, conf = probable_website_domain(row.get("company_name", ""))
-    row["website_domain"] = domain
-    row["website_domain_confidence"] = conf if domain else ""
 
     row["contact_email"] = row.get("contact_email") or ""
     row["linkedin_company"] = row.get("linkedin_company") or ""

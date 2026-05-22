@@ -18,7 +18,7 @@ def test_operator_dates_are_snapshot_files_only(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    result = scan_available_dates(demo=False, lookback_days=14)
+    result = scan_available_dates(lookback_days=14)
     assert result["dates"] == ["2026-05-15", "2026-05-10"]
     assert len(result["calendar_dates"]) >= 14
     assert "2026-05-12" in result["calendar_dates"]

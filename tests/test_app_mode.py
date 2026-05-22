@@ -24,7 +24,7 @@ def test_mode_config_production(monkeypatch):
     assert cfg["is_production"] is True
     assert cfg["operator_refresh_allowed"] is False
     assert cfg["show_dev_link"] is False
-    assert cfg["default_demo_cap"] is False
+    assert cfg["snapshot_first_queue"] is True
 
 
 def test_mode_config_development(monkeypatch):

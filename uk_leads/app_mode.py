@@ -22,13 +22,8 @@ def is_staging() -> bool:
 
 
 def operator_refresh_allowed() -> bool:
-    """RM UI may trigger live registry refresh (dev/staging only)."""
+    """Engineering-only in-app snapshot rebuild from registries (dev/staging)."""
     return not is_production()
-
-
-def default_demo_cap() -> bool:
-    """Default for optional UK top-25 cap (off in all modes)."""
-    return False
 
 
 def mode_config() -> dict:
@@ -38,6 +33,6 @@ def mode_config() -> dict:
         "app_mode": get_app_mode(),
         "is_production": production,
         "operator_refresh_allowed": operator_refresh_allowed(),
-        "default_demo_cap": default_demo_cap(),
+        "snapshot_first_queue": True,
         "show_dev_link": not production,
     }

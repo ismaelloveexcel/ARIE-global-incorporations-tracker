@@ -11,9 +11,6 @@ from uk_leads.enrichment import enrich_row, format_sic_codes
 
 CH_PROFILE_BASE = "https://find-and-update.company-information.service.gov.uk/company/"
 
-DEMO_MIN_SCORE = 40.0
-DEMO_TOP = 25
-
 TEAM_MEMBERS = ["Aisha", "Stephen", "Rajesh", "Tasneem", "Ismael"]
 
 CSV_FIELDS = [
@@ -31,8 +28,6 @@ CSV_FIELDS = [
     "lead_type_reason",
     "assigned_to",
     "source",
-    "website_domain",
-    "website_domain_confidence",
     "contact_email",
     "linkedin_company",
     "phone_number",
@@ -88,7 +83,6 @@ def record_to_row(record: CompanyRecord, run_date: str) -> dict:
         "contact_email": "",
         "linkedin_company": "",
         "phone_number": "",
-        "website_domain": "",
     }
     return enrich_row(base, raw_data=record.raw_data)
 
@@ -130,7 +124,3 @@ def load_csv(path: Path) -> list[dict]:
     return [enrich_row(dict(r)) for r in rows]
 
 
-def csv_path_for_date(date: str, demo: bool) -> Path:
-    if demo:
-        return Path("exports") / f"uk-leads-demo-{date}.csv"
-    return Path("exports") / f"uk-leads-{date}.csv"

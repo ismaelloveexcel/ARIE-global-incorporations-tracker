@@ -24,7 +24,7 @@ def _strip_block(html: str, start: str, end: str) -> str:
 def render_index_html() -> str:
     html = _INDEX_PATH.read_text(encoding="utf-8")
     production = is_production()
-    html = html.replace("{{ENV_BADGE}}", "LIVE SNAPSHOT" if production else "DEV MODE")
+    html = html.replace("{{ENV_BADGE}}", "PRODUCTION" if production else "DEV MODE")
     html = html.replace(
         "{{ENV_BADGE_CLASS}}",
         "env-badge--live" if production else "env-badge--dev",
