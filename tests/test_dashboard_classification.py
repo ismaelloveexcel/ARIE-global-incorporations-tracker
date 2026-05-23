@@ -45,6 +45,16 @@ def test_mu_domestic_excluded():
     assert is_introducer(row) is False
 
 
+def test_external_introducer_source_routes_to_introducers_only():
+    row = {
+        "source": "adgm_csp",
+        "company_name": "Example Corporate Services",
+        "entity_type": "Corporate Service Provider",
+    }
+    assert is_direct_client(row) is False
+    assert is_introducer(row) is True
+
+
 def test_lead_id_uk():
     row = {"source": "companies_house", "company_number": "12345678"}
     assert lead_id(row) == "12345678"

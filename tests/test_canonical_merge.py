@@ -183,3 +183,23 @@ def test_uk_leads_snapshot_files_ignored(exports_dir):
     assert meta["mauritius_count"] == 1
     assert all(r.get("jurisdiction") != "UK" or r.get("source") != "companies_house" for r in rows)
     assert not any(r.get("company_name") == "Phantom UK Ltd" for r in rows)
+
+
+def test_merge_includes_external_introducer_registry(exports_dir):
+    exports_dir.joinpath("2026-05-25.csv").write_text(
+        PIPELINE_HEADER
+        + "UK Co,uk co,UK,ltd,2026-05-25,80,companies_house,1,,\n",
+        encoding="utf-8",
+    )
+
+    intro_dir = Path("uk_leads") / "sources"
+    intro_dir.mkdir(parents=True, exist_ok=True)
+    intro_dir.joinpath("external_introducers.csv").write_text(
+        "company_name,jurisdiction,entity_type,source,contact_email\n"
+        "Acme Corporate Services,Mauritius,Management Company,mauritius_management_company,ops@example.com\n",
+        encoding="utf-8",
+    )
+
+    rows, meta = merge_leads_for_date("2026-05-25")
+    assert meta["external_introducer_count"] == 1
+    assert any(r.get("source") == "mauritius_management_company" for r in rows)

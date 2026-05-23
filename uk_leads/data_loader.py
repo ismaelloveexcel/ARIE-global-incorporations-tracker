@@ -5,21 +5,26 @@ import csv
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from uk_leads import refresh_meta
 from uk_leads.dashboard import MU_VERIFY_URL, is_mauritius_includable, lead_id
 from uk_leads.enrichment import enrich_row
+from uk_leads.freshness import evaluate_freshness
+from uk_leads.run_summary import load_run_summary
+from uk_leads.snapshot_registry import resolve_snapshot_path
 
 logger = logging.getLogger(__name__)
 
 PIPELINE_EXPORT = Path("exports") / "{date}.csv"
+EXTERNAL_INTRODUCERS_PATH = Path("uk_leads") / "sources" / "external_introducers.csv"
+_EXTERNAL_INTRODUCERS_FALLBACK_PATH = Path("data") / "introducers" / "external_introducers.csv"
 CH_PROFILE_BASE = "https://find-and-update.company-information.service.gov.uk/company/"
 
 
 def pipeline_export_path(date: str) -> Path:
-    return Path("exports") / f"{date}.csv"
+    return resolve_snapshot_path(date)
 
 
 def _parse_score(value) -> float:
@@ -171,6 +176,52 @@ def load_mauritius_from_pipeline(date: str) -> list[dict]:
     return rows
 
 
+def _normalize_name(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def load_external_introducers() -> list[dict]:
+    """Load curated external introducer rows from tracked source CSV."""
+    path = EXTERNAL_INTRODUCERS_PATH
+    if not path.exists() and _EXTERNAL_INTRODUCERS_FALLBACK_PATH.exists():
+        path = _EXTERNAL_INTRODUCERS_FALLBACK_PATH
+    if not path.exists():
+        return []
+
+    rows: list[dict] = []
+    with path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for raw in reader:
+            name = (raw.get("company_name") or "").strip()
+            if not name:
+                continue
+
+            source = (raw.get("source") or "external_introducer").strip().lower()
+            row = {
+                "run_date": "",
+                "company_name": name,
+                "normalized_name": (raw.get("normalized_name") or _normalize_name(name)).strip(),
+                "jurisdiction": (raw.get("jurisdiction") or "").strip(),
+                "entity_type": (raw.get("entity_type") or "").strip(),
+                "incorporation_date": (raw.get("incorporation_date") or "").strip(),
+                "score": _parse_score(raw.get("score")),
+                "source": source,
+                "assigned_to": "",
+                "notes": (raw.get("notes") or "").strip(),
+                "sic_codes": (raw.get("sic_codes") or "").strip(),
+                "company_number": (raw.get("company_number") or "").strip(),
+                "file_no": (raw.get("file_no") or "").strip(),
+                "verify_url": (raw.get("verify_url") or "").strip(),
+                "contact_email": (raw.get("contact_email") or "").strip(),
+                "phone_number": (raw.get("phone_number") or "").strip(),
+                "contact_name": (raw.get("contact_name") or "").strip(),
+            }
+            rows.append(row)
+
+    logger.info("Loaded %d external introducer rows from %s", len(rows), path)
+    return rows
+
+
 def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
     """Merge UK + Mauritius rows from exports/{date}.csv (canonical pipeline snapshot)."""
     pipeline_path = pipeline_export_path(date)
@@ -180,6 +231,8 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
         "mauritius_path": str(pipeline_path),
         "uk_count": 0,
         "mauritius_count": 0,
+        "external_introducer_count": 0,
+        "external_introducer_path": str(EXTERNAL_INTRODUCERS_PATH),
         "warnings": [],
     }
 
@@ -196,6 +249,12 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
 
     mu_rows = load_mauritius_from_pipeline(date)
     meta["mauritius_count"] = len(mu_rows)
+
+    external_rows = load_external_introducers()
+    meta["external_introducer_count"] = len(external_rows)
+    meta["external_introducer_exists"] = (
+        EXTERNAL_INTRODUCERS_PATH.exists() or _EXTERNAL_INTRODUCERS_FALLBACK_PATH.exists()
+    )
     if not pipeline_path.exists():
         meta["warnings"].append(f"No pipeline export for {date}")
         meta["pipeline_export_missing"] = True
@@ -210,7 +269,7 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
     merged: list[dict] = []
     seen_ids: set[str] = set()
 
-    for row in uk_rows + mu_rows:
+    for row in uk_rows + mu_rows + external_rows:
         base = dict(row)
         enriched = enrich_row(base)
         if enriched.get("source") == "mauritius_mns":
@@ -265,21 +324,77 @@ def _has_snapshot_files(date: str) -> bool:
     return pipeline_export_path(date).exists()
 
 
-def _date_counts_for_scan(date: str) -> dict:
-    uk_stats = uk_pipeline_export_stats(date)
+def _mtime_iso(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def _summary_for_scan(target_date: str) -> dict | None:
+    summary = load_run_summary()
+    if not summary:
+        return None
+    if summary.get("run_date") != target_date:
+        return None
+    return {
+        "pipeline_outcome": summary.get("pipeline_outcome"),
+        "notes": summary.get("notes"),
+        "run_date": summary.get("run_date"),
+        "matches_selected_date": True,
+        "connectors": summary.get("connectors") or {},
+        "run_timestamp": summary.get("run_timestamp"),
+    }
+
+
+def _has_archived_history(target_date: str) -> bool:
+    archive_dir = Path("exports") / "archive" / target_date
+    if not archive_dir.exists():
+        return False
+    return any(archive_dir.glob("archived-*.csv"))
+
+
+def _date_counts_for_scan(target_date: str) -> dict:
+    path = pipeline_export_path(target_date)
+    uk_stats = uk_pipeline_export_stats(target_date)
     uk_count = uk_stats.get("row_count", 0)
-    mu_stats = mauritius_export_stats(date)
-    has_snapshot = _has_snapshot_files(date)
+    mu_stats = mauritius_export_stats(target_date)
+    has_snapshot = path.exists()
     has_uk = uk_count > 0
     has_mauritius = mu_stats.get("gbc_ac", 0) > 0
+    summary = _summary_for_scan(target_date)
+    publication_timestamp = _mtime_iso(path)
+    freshness = evaluate_freshness(
+        target=target_date,
+        is_today=target_date == date.today().isoformat(),
+        uk={
+            # If snapshot file exists, we still treat timeline coverage as available even on quiet days.
+            "exists": has_snapshot,
+            "file_modified": publication_timestamp,
+        },
+        mauritius={
+            "exists": has_mauritius,
+            "file_modified": publication_timestamp if has_mauritius else None,
+        },
+        summary=summary,
+        now=datetime.now(timezone.utc),
+    )
+    confidence = freshness.get("operational_confidence") or {}
     return {
-        "date": date,
+        "date": target_date,
         "uk_count": uk_count,
         "mauritius_count": mu_stats.get("gbc_ac", 0),
         "has_uk": has_uk,
         "has_mauritius": has_mauritius,
         "has_data": has_uk or has_mauritius,
         "has_snapshot": has_snapshot,
+        "quiet_day": has_snapshot and not (has_uk or has_mauritius),
+        "publication_timestamp": publication_timestamp,
+        "freshness_state": freshness.get("state"),
+        "confidence_level": confidence.get("level"),
+        "fallback_active": bool(confidence.get("fallback_active")),
+        "archive_available": _has_archived_history(target_date),
         "mauritius_export_exists": mu_stats.get("exists", False),
     }
 

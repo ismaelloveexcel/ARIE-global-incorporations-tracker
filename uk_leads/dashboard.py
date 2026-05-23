@@ -20,6 +20,12 @@ _INTRODUCER_KEYWORDS = (
     "family office",
 )
 
+_EXTERNAL_INTRODUCER_SOURCES = {
+    "adgm_csp",
+    "mauritius_management_company",
+    "external_introducer",
+}
+
 
 def _mu_gbc_or_ac(entity_type: str | None) -> bool:
     entity = (entity_type or "").lower()
@@ -65,6 +71,9 @@ def is_introducer(row: dict) -> bool:
     source = row.get("source", "")
     entity = (row.get("entity_type") or "").lower()
     name = (row.get("company_name") or "").lower()
+
+    if source in _EXTERNAL_INTRODUCER_SOURCES:
+        return True
 
     if source == "companies_house":
         return False
