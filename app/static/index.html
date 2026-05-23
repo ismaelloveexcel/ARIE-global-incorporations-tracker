@@ -55,17 +55,37 @@
     </div>
 
     <div class="shell">
+      <section class="ops-summary card-surface" aria-label="Executive briefing summary">
+        <p class="section-label">Briefing</p>
+        <h2 class="ops-summary__headline ops-summary__headline--investigating" id="opsSummaryHeadline">Operational Status: Loading</h2>
+        <div class="ops-summary__body" id="opsSummaryBody"></div>
+      </section>
+
+      <section class="trust-panel card-surface" aria-label="Confidence note">
+        <p class="section-label">Confidence</p>
+        <p class="trust-panel__text" id="trustPanelText">Loading trust and explainability context…</p>
+      </section>
+
+      <section class="date-history card-surface" aria-label="Timeline context">
+        <div class="date-history__head">
+          <p class="section-label">Context</p>
+          <p class="date-history__title">Recent dates</p>
+        </div>
+        <div class="date-history__timeline" id="dateHistoryTimeline"></div>
+        <p class="date-history__narrative" id="dateHistoryNarrative">Loading published snapshot history…</p>
+      </section>
+
       <section class="ui-mode-switch" aria-label="Display mode">
         <div>
-          <p class="ui-mode-switch__title">Technical Monitoring Mode</p>
-          <p class="ui-mode-switch__summary">Full operational context is always visible for system monitoring and troubleshooting.</p>
+          <p class="ui-mode-switch__title">Lens</p>
+          <p class="ui-mode-switch__summary">Choose the review lens for this briefing.</p>
         </div>
       </section>
 
       <section class="decision-hero card-surface" aria-label="Registration Intelligence Queue">
         <div class="decision-hero__copy">
-          <p class="section-label">Executive Summary</p>
-          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Onboarding Intelligence Queue</p>
+          <p class="section-label">Opportunities</p>
+          <p class="decision-hero__eyebrow" id="queueHeroEyebrow">Onboarding Pipeline</p>
           <div class="decision-hero__status">
             <h2 class="decision-hero__date" id="queueHeroDate">—</h2>
             <p class="decision-hero__updated" id="queueHeroRefreshed">—</p>
@@ -74,20 +94,20 @@
           <div class="hero-analytics" id="queueHeroStats" aria-live="polite"></div>
         </div>
         <div class="decision-hero__action">
-          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Review / Assessment Queue</button>
+          <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Open Priority Queue</button>
           <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
         </div>
       </section>
 
-      <nav class="queue-tabs card-surface card-surface--tight" role="tablist" aria-label="Operational intelligence channels">
+      <nav class="queue-tabs card-surface card-surface--tight" role="tablist" aria-label="Workflow lens">
         <button type="button" class="queue-tabs__btn active" role="tab" id="tabDirect" aria-selected="true" aria-controls="directClientsView" data-view="direct_clients">Onboarding Intelligence Queue</button>
         <button type="button" class="queue-tabs__btn" role="tab" id="tabIntroducers" aria-selected="false" aria-controls="introducersView" data-view="introducers">Introducer Intelligence Channel</button>
       </nav>
 
       <section class="provenance-panel card-surface" id="intelligenceProvenance" aria-label="Governance / Provenance Layer">
-        <p class="section-label">Risk &amp; Compliance Signals</p>
-        <p class="provenance-panel__title">Governance / Provenance Layer</p>
-        <p class="provenance-panel__subtitle">Decision-ready workflow states: High Relevance, Monitor, Introducer Opportunity, Not Relevant</p>
+        <p class="section-label">Method</p>
+        <p class="provenance-panel__title">How this brief is built</p>
+        <p class="provenance-panel__subtitle">Registry evidence, scoring signals, and optional AI context</p>
         <div class="provenance-panel__items" id="provenancePanelItems"></div>
       </section>
 
@@ -96,7 +116,7 @@
       <div id="queueErrorBanner" class="queue-error-banner" hidden role="alert" aria-live="assertive"></div>
 
       <main class="main card-surface card-surface--spacious" id="directClientsView" role="tabpanel" aria-labelledby="tabDirect">
-        <p class="section-label">Operational Breakdown</p>
+        <p class="section-label">Priority opportunities</p>
         <section class="executive-quick-bar" id="executiveQuickBar" aria-label="Executive quick metrics"></section>
         <div class="notice-banner notice-mu-missing" id="mauritiusMissingNotice" hidden>
           <p id="mauritiusMissingText"></p>
@@ -126,13 +146,12 @@
             <input type="search" id="filterSearch" name="search" placeholder="Search company…" autocomplete="off" />
           </label>
         </form>
-        <p class="decision-bar__note muted">Prioritisation uses Internal heuristic rankings.</p>
-        <p class="decision-bar__note muted">Verification links open Registry verified official registries.</p>
-
+        <p class="decision-bar__note muted" hidden aria-hidden="true">Prioritisation uses Internal heuristic rankings.</p>
+        <p class="decision-bar__note muted" hidden aria-hidden="true">Verification links open Registry verified official registries.</p>
         <section class="panel table-panel table-panel--minimal" aria-labelledby="panelTitle">
           <div class="panel-head panel-head-row">
             <div>
-              <h2 id="panelTitle">Registration Intelligence Queue</h2>
+              <h2 id="panelTitle">Onboarding Opportunity Queue</h2>
               <p id="panelSubtitle" class="panel-subtitle-muted" aria-live="polite"></p>
             </div>
             <button type="button" class="btn btn-ghost btn-sm" id="exportBtn" title="Download the leads currently shown (filters and sort applied)">Export current view</button>

@@ -18,12 +18,14 @@ let canFetchUk = false;
 let canFetchMauritius = false;
 let snapshotDates = [];
 let availableDates = [];
+let calendarDates = [];
 let dateDetails = [];
 let currentDate = "";
 let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
 let isProductionMode = false;
+let modeVariant = "development";
 let operatorRefreshAllowed = true;
 let lastDataStatus = null;
 let detailReturnFocus = null;
@@ -31,6 +33,9 @@ let activeQueueView = "direct_clients";
 let uiViewMode = "technical";
 const TABLE_COLSPAN = 5;
 const SCORE_TIERS = { high: 70, strong: 40, monitor: 0 };
+const DEFAULT_ASSIGNEES = ["Aisha", "Ismael", "Rajesh", "Stephen", "Tasneem"];
+const ADD_ASSIGNEE_VALUE = "__add_name__";
+const customAssignees = new Set();
 
 const VIEW_MODES = {
   strong: { minScore: SCORE_TIERS.strong, label: "High Relevance" },
@@ -193,9 +198,9 @@ function setFilterState(partial) {
 
 function applyScoreTierLabels() {
   const heroBtn = $("#reviewHighPriorityBtn");
-  if (heroBtn) heroBtn.textContent = "Review / Assessment Queue";
+  if (heroBtn) heroBtn.textContent = "Open Priority Queue";
   const heroEyebrow = $("#queueHeroEyebrow");
-  if (heroEyebrow) heroEyebrow.textContent = "Onboarding Intelligence Queue";
+  if (heroEyebrow) heroEyebrow.textContent = "Onboarding Pipeline";
   document.querySelectorAll(".view-mode__btn[data-view]").forEach((btn) => {
     const mode = VIEW_MODES[btn.dataset.view];
     if (mode) btn.textContent = mode.label;
@@ -380,11 +385,11 @@ function renderQueueSummaryMetrics(statsEl, metrics) {
   const mu = Number(m.mauritius_count) || 0;
   const high = Number(m.high_priority) || 0;
   statsEl.innerHTML = `
-    <p class="queue-summary__caption muted">Executive queue summary</p>
+    <p class="queue-summary__caption muted">Morning briefing posture</p>
     <div class="queue-summary" role="group" aria-label="Queue summary for this snapshot">
       <div class="queue-summary__item">
         <span class="queue-summary__value">${total}</span>
-        <span class="queue-summary__label">Candidate Entities</span>
+        <span class="queue-summary__label">Entities</span>
       </div>
       <div class="queue-summary__item">
         <span class="queue-summary__value">${uk}</span>
@@ -396,7 +401,7 @@ function renderQueueSummaryMetrics(statsEl, metrics) {
       </div>
       <div class="queue-summary__item queue-summary__item--highlight">
         <span class="queue-summary__value">${high}</span>
-        <span class="queue-summary__label">High Relevance (${SCORE_TIERS.high}+)</span>
+        <span class="queue-summary__label">High Relevance</span>
       </div>
     </div>`;
 }
@@ -406,10 +411,23 @@ function renderExecutiveQuickBar() {
   if (!el) return;
 
   const rows = queueScopedLeads(getFilteredLeads());
-  const scopeLabel = activeQueueView === "introducers" ? "Introducers Queue" : "Onboarding Queue";
+  const ranked = [...rows].sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+  const topLead = ranked[0] || null;
+  const scopeLabel = activeQueueView === "introducers" ? "Introducer Review" : "Onboarding Review";
   const total = rows.length;
   const high = rows.filter((l) => (Number(l.score) || 0) >= SCORE_TIERS.high).length;
   const assigned = rows.filter((l) => (l.assigned_to || "").trim()).length;
+  const ukCount = rows.filter((l) => (l.jurisdiction || "") === "UK").length;
+  const muCount = rows.filter((l) => (l.jurisdiction || "") === "Mauritius").length;
+  const concentration = ukCount >= muCount ? `Primary coverage: UK (${ukCount}/${total || 1})` : `Primary coverage: Mauritius (${muCount}/${total || 1})`;
+  const topName = topLead ? displayCompanyName(topLead.company_name || "Top candidate") : "No candidate selected";
+  const urgencyLine = high ? `${high} high-relevance entities require close review` : "No immediate high-relevance escalation at this time";
+  let nextMove = "Wait for the next published snapshot";
+  if (topLead) {
+    nextMove = (topLead.assigned_to || "").trim()
+      ? `Advance ${topName} into onboarding diligence`
+      : `Assign ${topName} for first-pass review`;
+  }
   const statusType = lastDataStatus?.banner?.type || "green";
   const statusLabel =
     statusType === "red"
@@ -419,20 +437,25 @@ function renderExecutiveQuickBar() {
         : "Healthy";
 
   el.innerHTML = `
+    <article class="executive-quick-bar__item executive-quick-bar__item--decision">
+      <p class="executive-quick-bar__label">Decision Focus</p>
+      <p class="executive-quick-bar__value executive-quick-bar__value--text">${escapeHtml(topName)}</p>
+      <p class="executive-quick-bar__meta">${escapeHtml(urgencyLine)} · ${escapeHtml(nextMove)} · ${escapeHtml(concentration)}</p>
+    </article>
     <article class="executive-quick-bar__item">
-      <p class="executive-quick-bar__label">Entities In View (${scopeLabel})</p>
+      <p class="executive-quick-bar__label">Ready in ${scopeLabel}</p>
       <p class="executive-quick-bar__value">${total}</p>
     </article>
     <article class="executive-quick-bar__item executive-quick-bar__item--highlight">
-      <p class="executive-quick-bar__label">High Relevance</p>
+      <p class="executive-quick-bar__label">Immediate</p>
       <p class="executive-quick-bar__value">${high}</p>
     </article>
     <article class="executive-quick-bar__item">
-      <p class="executive-quick-bar__label">Assigned</p>
+      <p class="executive-quick-bar__label">In Review</p>
       <p class="executive-quick-bar__value">${assigned}</p>
     </article>
     <article class="executive-quick-bar__item">
-      <p class="executive-quick-bar__label">Snapshot Health</p>
+      <p class="executive-quick-bar__label">Confidence</p>
       <p class="executive-quick-bar__value executive-quick-bar__status executive-quick-bar__status--${statusType}">${statusLabel}</p>
     </article>`;
 }
@@ -440,7 +463,7 @@ function renderExecutiveQuickBar() {
 function updateHeroMetaLine() {
   const metaEl = $("#queueHeroMeta");
   if (!metaEl) return;
-  const scopeLabel = activeQueueView === "introducers" ? "Introducers Queue" : "Onboarding Queue";
+  const scopeLabel = activeQueueView === "introducers" ? "Introducer Lens" : "Onboarding Lens";
   const total = queueScopedLeads(allLeads).length;
   if (!total) {
     metaEl.hidden = true;
@@ -449,10 +472,11 @@ function updateHeroMetaLine() {
   }
   const visible = queueScopedLeads(getFilteredLeads()).length;
   const mode = VIEW_MODES[filterState.viewMode]?.label || "View";
+  const shortMode = mode === "Candidate Entities" ? "Candidates" : mode;
   if (visible === total) {
-    metaEl.textContent = `${scopeLabel} · ${total} candidate entities in this snapshot · ${mode}`;
+    metaEl.textContent = `${scopeLabel} · ${total} entities · ${shortMode}`;
   } else {
-    metaEl.textContent = `${scopeLabel} · showing ${visible} of ${total} candidate entities · ${mode}`;
+    metaEl.textContent = `${scopeLabel} · ${visible} of ${total} · ${shortMode}`;
   }
   metaEl.hidden = false;
 }
@@ -469,13 +493,9 @@ function updateTablePanelSubtitle() {
   const scrollMore =
     wrap?.classList.contains("is-scrollable-y") && visible > 0 ? " · Scroll for more" : "";
   if (visible === total) {
-    setPanelSubtitle(
-      `${total} candidate entities in Registration Intelligence Queue · ${dateLabel}${scrollMore}`
-    );
+    setPanelSubtitle(`${total} entities · ${dateLabel}${scrollMore}`);
   } else {
-    setPanelSubtitle(
-      `${visible} of ${total} candidate entities shown · ${dateLabel}${scrollMore}`
-    );
+    setPanelSubtitle(`${visible} of ${total} entities · ${dateLabel}${scrollMore}`);
   }
 }
 
@@ -525,9 +545,11 @@ function leadKey(lead) {
 function applyOperationalMode(meta) {
   isProductionMode = !!meta?.is_production;
   operatorRefreshAllowed = meta?.operator_refresh_allowed !== false;
+  const modeLabel = String(meta?.mode_label || "").trim();
+  modeVariant = String(meta?.mode_variant || "").trim() || "development";
 
   const devLink = $("#devOpsLink");
-  if (devLink) devLink.hidden = meta?.show_dev_link === false;
+  if (devLink) devLink.hidden = meta?.show_dev_link === false || modeVariant === "demo";
 
   const refreshBtn = $("#refreshBtn");
   if (refreshBtn) {
@@ -540,9 +562,11 @@ function applyOperationalMode(meta) {
 
   const badge = $("#envBadge");
   if (badge && meta?.is_production !== undefined) {
-    badge.textContent = meta.is_production ? "PRODUCTION" : "DEV MODE";
+    badge.textContent = modeLabel || (meta.is_production ? "PRODUCTION" : "DEV MODE");
     badge.classList.toggle("env-badge--live", !!meta.is_production);
-    badge.classList.toggle("env-badge--dev", !meta.is_production);
+    badge.classList.toggle("env-badge--demo", modeVariant === "demo");
+    badge.classList.toggle("env-badge--hybrid", modeVariant === "hybrid");
+    badge.classList.toggle("env-badge--dev", !meta.is_production && modeVariant !== "demo" && modeVariant !== "hybrid");
   }
 }
 
@@ -578,6 +602,7 @@ async function loadAvailableDates() {
     datesApiOk = res.ok;
     if (!res.ok) {
       availableDates = [];
+      calendarDates = [];
       dateDetails = [];
       appHasDates = false;
       syncSnapshotControls();
@@ -587,6 +612,7 @@ async function loadAvailableDates() {
     const data = await res.json();
     availableDates = data.dates || [];
     snapshotDates = data.snapshot_dates || [];
+    calendarDates = data.calendar_dates || [];
     dateDetails = data.date_details || [];
     canFetchUk = !!data.can_fetch_uk;
     canFetchMauritius = !!data.can_fetch_mauritius;
@@ -599,6 +625,7 @@ async function loadAvailableDates() {
   } catch {
     datesApiOk = false;
     availableDates = [];
+    calendarDates = [];
     dateDetails = [];
     appHasDates = false;
     syncSnapshotControls();
@@ -615,6 +642,11 @@ function dateDetail(date) {
       mauritius_count: 0,
       has_data: false,
       has_snapshot: false,
+      publication_timestamp: null,
+      freshness_state: "unknown",
+      confidence_level: "unknown",
+      fallback_active: false,
+      archive_available: false,
     }
   );
 }
@@ -667,15 +699,233 @@ function dateOptionLabel(d) {
   return label;
 }
 
-function poolMembersForTab(tab = activeQueueView) {
-  if (tab === "introducers") {
-    const intro = assignmentPools.introducers;
-    if (Array.isArray(intro) && intro.length) return intro;
-    return ["Aisha", "Stephen", "Rajesh"];
+function nearestAvailableDate(targetDate) {
+  if (!targetDate || !availableDates.length) return "";
+  if (availableDates.includes(targetDate)) return targetDate;
+  for (const d of availableDates) {
+    if (d < targetDate) return d;
   }
-  const direct = assignmentPools.direct_clients;
-  if (Array.isArray(direct) && direct.length) return direct;
-  return ["Ismael", "Tasneem"];
+  return availableDates[availableDates.length - 1] || "";
+}
+
+function dateToneForTimeline(date, statusData) {
+  const detail = dateDetail(date);
+  const isCurrent = date === getCurrentDate();
+
+  if (!detail.has_snapshot) return { key: "missing", label: "Missing" };
+  if (!detail.has_data) return { key: "partial", label: "Quiet Day" };
+
+  const detailState = String(detail.freshness_state || "").toLowerCase();
+  if (!isCurrent) {
+    if (detail.fallback_active) return { key: "stale", label: "Fallback" };
+    if (detailState === "error") return { key: "critical", label: "Critical" };
+    if (detailState === "stale") return { key: "stale", label: "Stale" };
+    if (detailState === "partial") return { key: "partial", label: "Partial" };
+    if (detail.archive_available) return { key: "healthy", label: "Archived" };
+  }
+
+  if (isCurrent) {
+    const state = statusData?.freshness?.state || "unknown";
+    if (state === "error") return { key: "critical", label: "Critical" };
+    if (state === "stale") return { key: "stale", label: "Stale" };
+    if (state === "partial") return { key: "partial", label: "Partial" };
+    if (state === "healthy") return { key: "healthy", label: "Healthy" };
+  }
+
+  return { key: "healthy", label: "Published" };
+}
+
+function formatTimelineTimestamp(iso) {
+  if (!iso) return "No publication time";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-GB", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+  } catch {
+    return String(iso);
+  }
+}
+
+function timelineDates() {
+  const source = calendarDates.length ? calendarDates : availableDates;
+  if (!source.length) return [];
+  const baseline = getCurrentDate() || source[0];
+  const idx = source.indexOf(baseline);
+  if (idx < 0) return source.slice(0, 12);
+  const end = Math.min(source.length, idx + 12);
+  return source.slice(idx, end);
+}
+
+function renderDateHistory(statusData = null) {
+  const timelineEl = $("#dateHistoryTimeline");
+  const narrativeEl = $("#dateHistoryNarrative");
+  if (!timelineEl || !narrativeEl) return;
+
+  const current = getCurrentDate();
+  const dates = timelineDates();
+
+  if (!dates.length) {
+    timelineEl.innerHTML = '<p class="date-history__empty">No recent timeline context is available in this environment yet.</p>';
+    narrativeEl.textContent = "No recent briefing dates are currently available.";
+    return;
+  }
+
+  let missingRun = 0;
+  timelineEl.innerHTML = dates
+    .map((d) => {
+      const tone = dateToneForTimeline(d, statusData);
+      const isCurrent = d === current;
+      const isAvailable = availableDates.includes(d);
+      const detail = dateDetail(d);
+      if (!isCurrent && tone.key === "missing") missingRun += 1;
+      else missingRun = 0;
+      const quietHistory = !isCurrent && tone.key === "missing" && missingRun > 1;
+
+      const confidence = `Confidence ${String(detail.confidence_level || "unknown").toUpperCase()}`;
+      const archived = detail.archive_available ? "Archived lineage" : "Active lineage";
+      const metaLine = isCurrent
+        ? `${formatTimelineTimestamp(detail.publication_timestamp)} · ${confidence}`
+        : quietHistory
+          ? ""
+          : formatTimelineTimestamp(detail.publication_timestamp);
+      const detailTitle = `${formatDisplayDate(d)} · ${tone.label} · ${metaLine} · ${archived}`;
+      const chipLabel = quietHistory ? "Past" : tone.label;
+      const chipMeta = metaLine ? `<small class="date-chip__meta">${escapeHtml(metaLine)}</small>` : "";
+      const chipClass = `${tone.key}${isCurrent ? " is-current" : ""}${quietHistory ? " is-history" : ""}`;
+      const action = isAvailable
+        ? `<button type="button" class="date-chip date-chip--${chipClass}" data-date="${d}" title="${escapeHtml(detailTitle)}">${escapeHtml(formatDisplayDateShort(d))}<span>${chipLabel}</span>${chipMeta}</button>`
+        : `<span class="date-chip date-chip--${tone.key} is-disabled${quietHistory ? " is-history" : ""}" title="${escapeHtml(detailTitle)}">${escapeHtml(formatDisplayDateShort(d))}<span>${chipLabel}</span>${chipMeta}</span>`;
+      return action;
+    })
+    .join("");
+
+  timelineEl.querySelectorAll("button[data-date]").forEach((btn) => {
+    btn.addEventListener("click", () => setSelectedDate(btn.dataset.date));
+  });
+
+  const detail = dateDetail(current);
+  const nearest = nearestAvailableDate(current);
+  if (!current) {
+    narrativeEl.textContent = "Select a published date to anchor this briefing.";
+  } else if (!detail.has_snapshot && nearest && nearest !== current) {
+    narrativeEl.textContent = `No published file exists for ${formatDisplayDate(current)}. The nearest available date is ${formatDisplayDate(nearest)}.`;
+  } else if (statusData?.freshness?.state === "stale") {
+    narrativeEl.textContent = `You are viewing ${formatDisplayDate(current)}. This snapshot is stale, so continue with fallback-aware review before escalation.`;
+  } else {
+    narrativeEl.textContent = `You are viewing ${formatDisplayDate(current)}. Earlier dates remain available above for quiet context.`;
+  }
+}
+
+function statusSeverity(statusData) {
+  const state = statusData?.freshness?.state || "unknown";
+  const conf = (statusData?.operational_confidence?.level || "").toLowerCase();
+  const fallback = !!statusData?.operational_confidence?.fallback_active;
+
+  if (state === "error") return { key: "critical", label: "Critical" };
+  if (state === "stale" || state === "partial") return { key: "degraded", label: "Watch" };
+  if (conf === "low") return { key: "degraded", label: "Watch" };
+  if (fallback) return { key: "investigating", label: "Review" };
+  return { key: "healthy", label: "Healthy" };
+}
+
+function renderTrustPanel(statusData) {
+  const el = $("#trustPanelText");
+  if (!el) return;
+  const statement = statusData?.executive?.trust_statement ||
+    "Published snapshot validated.";
+  const concise = (statement.split(". ")[0] || statement).replace("This platform only displays ", "");
+  el.textContent = concise.endsWith(".") ? concise : `${concise}.`;
+}
+
+function renderExecutiveStatusCard(statusData) {
+  const headlineEl = $("#opsSummaryHeadline");
+  const bodyEl = $("#opsSummaryBody");
+  if (!headlineEl || !bodyEl) return;
+
+  if (!statusData) {
+    headlineEl.className = "ops-summary__headline ops-summary__headline--investigating";
+    headlineEl.textContent = "Briefing: Loading";
+    bodyEl.innerHTML = "";
+    return;
+  }
+
+  const severity = statusSeverity(statusData);
+  const conf = statusData?.operational_confidence || {};
+  const executive = statusData?.executive || {};
+  const actionability = executive.incident_actionability || {};
+  const delta = executive.delta_intelligence || {};
+  const freshnessState = String(statusData?.freshness?.state || "unknown").toLowerCase();
+  const ukUpdated = statusData?.uk?.file_modified || "";
+  const muUpdated = statusData?.mauritius?.file_modified || "";
+  const entityTotal = (statusData?.uk?.row_count || 0) + (statusData?.mauritius?.row_count || 0);
+  const publishedAt = ukUpdated || muUpdated;
+  const totalSources = Math.max((conf.verified_sources ?? 0) + (conf.failed_sources ?? 0), 1);
+  const sourceCoverage = `${conf.verified_sources ?? 0}/${totalSources} sources confirmed`;
+  const narrativeRaw = executive.narrative_sentence || "Opportunity narrative is loading.";
+  const narrative = narrativeRaw.split(". ")[0] || narrativeRaw;
+  const deltaLine = delta?.available && Array.isArray(delta.highlights) && delta.highlights.length
+    ? delta.highlights[0]
+    : "Change intelligence will appear after the next published comparison point.";
+  const recommendation = actionability.recommended_next_step || "Continue standard review cadence.";
+  const incidentDetail = [
+    actionability.what_happened,
+    actionability.user_impact,
+    actionability.fallback,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  headlineEl.className = `ops-summary__headline ops-summary__headline--${severity.key}`;
+  headlineEl.textContent = `Today's Opportunity Outlook: ${severity.label}`;
+
+  bodyEl.innerHTML = `
+    <article class="ops-summary__metric ops-summary__metric--wide">
+      <p class="ops-summary__label">Lead story</p>
+      <p class="ops-summary__value ops-summary__value--text">${escapeHtml(narrative)}</p>
+    </article>
+    <article class="ops-summary__metric">
+      <p class="ops-summary__label">As of</p>
+      <p class="ops-summary__value">${escapeHtml(formatTrustGenerated(publishedAt))}</p>
+    </article>
+    <article class="ops-summary__metric">
+      <p class="ops-summary__label">Sources</p>
+      <p class="ops-summary__value">${escapeHtml(sourceCoverage)}</p>
+    </article>
+    <article class="ops-summary__metric">
+      <p class="ops-summary__label">Entities</p>
+      <p class="ops-summary__value">${escapeHtml(String(entityTotal || 0))}</p>
+    </article>
+    <article class="ops-summary__metric">
+      <p class="ops-summary__label">Confidence</p>
+      <p class="ops-summary__value">${escapeHtml((conf.level || "unknown").toUpperCase())}</p>
+    </article>
+    ${freshnessState === "healthy" ? "" : `<article class="ops-summary__metric ops-summary__metric--wide"><p class="ops-summary__label">Context</p><p class="ops-summary__value ops-summary__value--text">${escapeHtml(incidentDetail || deltaLine)}</p></article>`}
+    <article class="ops-summary__metric ops-summary__metric--wide">
+      <p class="ops-summary__label">Next move</p>
+      <p class="ops-summary__value ops-summary__value--text">${escapeHtml(recommendation)}</p>
+    </article>
+  `;
+
+  renderTrustPanel(statusData);
+}
+
+function poolMembersForTab(tab = activeQueueView) {
+  const direct = Array.isArray(assignmentPools.direct_clients)
+    ? assignmentPools.direct_clients
+    : [];
+  const introducers = Array.isArray(assignmentPools.introducers)
+    ? assignmentPools.introducers
+    : [];
+  const members = [...DEFAULT_ASSIGNEES, ...direct, ...introducers, ...team, ...customAssignees]
+    .map((name) => String(name || "").trim())
+    .filter(Boolean);
+  return [...new Set(members)];
 }
 
 function syncSnapshotControls() {
@@ -697,6 +947,7 @@ function syncSnapshotControls() {
       ? "Snapshot dates unavailable — reload the page"
       : "Snapshot dates unavailable — contact operations";
     if (nav) nav.classList.add("header-date-nav--disabled");
+    renderDateHistory(lastDataStatus);
     return;
   }
 
@@ -724,6 +975,8 @@ function syncSnapshotControls() {
     sel.value = workingDate;
     currentDate = workingDate;
   }
+
+  renderDateHistory(lastDataStatus);
 }
 
 function renderQueueHero(payload) {
@@ -745,7 +998,7 @@ function renderQueueHero(payload) {
     }
     if (statsEl) {
       statsEl.innerHTML =
-          '<p class="queue-summary__empty muted">Pick a snapshot date to load the queue.</p>';
+          '<p class="queue-summary__empty muted">Pick a snapshot date to load the pipeline.</p>';
     }
     updateHeroMetaLine();
     return;
@@ -770,9 +1023,9 @@ function renderQueueHero(payload) {
         ? formatTrustGenerated(snapshotTs)
         : "";
     const parts = [];
-    if (refreshed) parts.push(`Last successful update ${refreshed}`);
-    if (lastDataStatus?.banner?.type === "amber" && /stale/i.test(lastDataStatus.banner.message || "")) {
-      parts.push("Snapshot may be stale — review before decisioning");
+    if (refreshed) parts.push(refreshed);
+    if (lastDataStatus?.freshness?.state === "stale") {
+      parts.push("Stale snapshot");
     }
     refreshedEl.textContent = parts.length ? parts.join(" · ") : "Awaiting last successful update timestamp";
   }
@@ -791,9 +1044,8 @@ function updateTabGuidance() {
   if (!el) return;
   const n = queueScopedLeads(getFilteredLeads()).length;
   const mode = VIEW_MODES[filterState.viewMode] || VIEW_MODES.all;
-  const min = mode.minScore;
   const modePhrase =
-    filterState.viewMode === "strong" ? "high-relevance queue" : "candidate-entity queue";
+    filterState.viewMode === "strong" ? "high-relevance focus" : "full opportunity queue";
   const jPhrase = jurisdictionGuidancePhrase();
   const search = filterState.search.trim();
   if (!queueScopedLeads(allLeads).length) {
@@ -802,14 +1054,13 @@ function updateTabGuidance() {
   }
   if (n === 0) {
     el.textContent = search
-      ? `No ${modePhrase} candidates match “${search}”${jPhrase} — try Candidate Entities.`
-      : `No candidates in ${modePhrase} (score ≥${min})${jPhrase} — try Candidate Entities.`;
+      ? `No matches for “${search}”${jPhrase}.`
+      : `No entities in this view${jPhrase}.`;
     return;
   }
-  const scoreNote = filterState.viewMode === "all" ? "all scores" : `score ≥${min}`;
   el.textContent = search
-    ? `Showing ${n} ${modePhrase} candidates matching “${search}” (${scoreNote})${jPhrase}`
-    : `Showing ${n} in ${modePhrase} (${scoreNote})${jPhrase} · sorted by score`;
+    ? `${n} entities match “${search}”${jPhrase}`
+    : `${n} entities · ${modePhrase}${jPhrase}`;
 }
 
 function updateDateNavButtons() {
@@ -853,6 +1104,7 @@ function setSelectedDate(date) {
   updateDateNavButtons();
   fetchDataStatus();
   fetchLeads(false);
+  renderDateHistory(lastDataStatus);
 }
 
 function showFieldSaved(anchorEl, success = true, fadeMs = 3000) {
@@ -1025,17 +1277,6 @@ function formatTrustGenerated(iso) {
   }
 }
 
-function exportAgeHours(iso) {
-  if (!iso) return null;
-  try {
-    return (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  } catch {
-    return null;
-  }
-}
-
-const TRUST_STALE_HOURS = 36;
-
 function renderTrustStrip(statusData) {
   const el = $("#trustStripInner");
   if (!el) return;
@@ -1046,61 +1287,36 @@ function renderTrustStrip(statusData) {
       : null;
   const uk = statusData?.uk || {};
   const mu = statusData?.mauritius || {};
+  const conf = statusData?.operational_confidence || {};
   const ukCount = loaded?.metrics?.uk_count ?? uk.row_count ?? 0;
   const muCount = loaded?.metrics?.mauritius_count ?? mu.row_count ?? 0;
-  const filtered = allLeads.length ? getFilteredLeads() : [];
-  const inView = filtered.length || loaded?.count || 0;
-  const filterNote = activeFilterSummary();
+  const entityCount = ukCount + muCount;
   const generatedIso = uk.file_modified || mu.file_modified;
-  const sourceLabel =
-    uk.exists && mu.exists
-      ? "Source: Companies House registry and Mauritius registry export"
-      : uk.exists
-        ? "Source: Companies House registry"
-        : mu.exists
-          ? "Source: Mauritius registry export"
-          : "Source: No prepared registry source available";
+  const sourceLabel = `${conf.verified_sources ?? 0}/${Math.max((conf.verified_sources ?? 0) + (conf.failed_sources ?? 0), 1)} registries verified`;
 
-  let health = "healthy";
-  let healthLabel = "Healthy";
+  let health = statusData?.freshness?.state || "unknown";
+  let healthLabel = statusData?.freshness?.label || "Unknown";
+  if (!date) {
+    health = "unknown";
+    healthLabel = "Pick a date";
+  }
   if ($("#queueErrorBanner") && !$("#queueErrorBanner").hidden) {
     health = "error";
     healthLabel = "Error";
-  } else if (!date) {
-    health = "unknown";
-    healthLabel = "Pick a date";
-  } else if (!uk.exists && !mu.exists) {
-    health = "missing";
-    healthLabel = "No snapshot";
-  } else if (uk.exists && !mu.exists) {
-    health = "partial";
-    healthLabel = "Partial";
-  } else if (statusData?.banner?.type === "red") {
-    health = "error";
-    healthLabel = "Issue";
-  } else if (statusData?.banner?.type === "amber") {
-    health = "partial";
-    healthLabel = "Check";
-  }
-
-  const ageH = exportAgeHours(generatedIso);
-  if (health === "healthy" && ageH != null && ageH > TRUST_STALE_HOURS) {
-    health = "stale";
-    healthLabel = "Stale";
   }
 
   const snapshotLabel = date ? formatDisplayDate(date) : "—";
   el.innerHTML = `
-    <span class="trust-strip__item trust-strip__item--snapshot">Snapshot: <strong>${escapeHtml(snapshotLabel)}</strong> · Generated ${formatTrustGenerated(generatedIso)}</span>
+    <span class="trust-strip__item trust-strip__item--snapshot"><strong>${escapeHtml(snapshotLabel)}</strong> · Published ${formatTrustGenerated(generatedIso)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item trust-strip__item--source">${escapeHtml(sourceLabel)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
-    <span class="trust-strip__item">UK: <strong>Updated ${formatTrustUtc(uk.file_modified)}</strong> · ${ukCount} leads</span>
+    <span class="trust-strip__item">${entityCount} entities</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
-    <span class="trust-strip__item">Mauritius: <strong>Updated ${formatTrustUtc(mu.file_modified)}</strong> · ${muCount} leads</span>
-    <span class="trust-strip__sep" aria-hidden="true">|</span>
-    <span class="trust-strip__item">Queue: <span class="trust-strip__health trust-strip__health--${health}">${healthLabel}</span>${inView ? ` · ${inView} in view` : ""}${filterNote ? ` · ${escapeHtml(filterNote)}` : ""}</span>
+    <span class="trust-strip__item">Quality <span class="trust-strip__health trust-strip__health--${health}">${healthLabel}</span></span>
   `;
+
+  renderExecutiveStatusCard(statusData);
 }
 
 function activeFilterSummary() {
@@ -1172,6 +1388,7 @@ function showTableEmptyState() {
   const body = $("#leadsBody");
   const date = getCurrentDate();
   const detail = dateDetail(date);
+  const nearest = nearestAvailableDate(date);
   const canLoad =
     operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_snapshot;
   let title = "No prepared snapshots available";
@@ -1193,6 +1410,9 @@ function showTableEmptyState() {
   } else if (isProductionMode) {
     text =
       "The overnight pipeline has not yet produced a snapshot for this date. Try another date or contact operations.";
+    if (date && nearest && nearest !== date) {
+      text = `No published snapshot exists for ${formatDisplayDate(date)}. The nearest available operational snapshot is ${formatDisplayDate(nearest)}.`;
+    }
   } else if (canLoad) {
     text =
       "The overnight pipeline has not yet produced a snapshot for this date. Use the date menu to pick another day, or load UK register data for this date.";
@@ -1283,6 +1503,7 @@ async function fetchDataStatus() {
     const data = await res.json();
     lastDataStatus = data;
     renderTrustStrip(data);
+    renderDateHistory(data);
     if (!appHasDates && (!data.banner || data.banner.type === "none") && !hasQueue) {
       renderNoEnvironmentDataBanner();
       return;
@@ -1291,6 +1512,7 @@ async function fetchDataStatus() {
   } catch {
     if (!appHasDates && !hasQueue) renderNoEnvironmentDataBanner();
     renderTrustStrip(lastDataStatus);
+    renderDateHistory(lastDataStatus);
   }
 }
 
@@ -1605,7 +1827,63 @@ function assigneeOptions(lead, queueView = activeQueueView) {
   if (val && !members.includes(val)) {
     html += `<option value="${escapeHtml(val)}" selected>${escapeHtml(val)}</option>`;
   }
+  html += `<option value="${ADD_ASSIGNEE_VALUE}">+ Add name</option>`;
   return html;
+}
+
+function normalizeAssigneeName(raw) {
+  const cleaned = String(raw || "").trim().replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  return cleaned.slice(0, 64);
+}
+
+function addCustomAssigneeName(name) {
+  const normalized = normalizeAssigneeName(name);
+  if (!normalized) return "";
+  customAssignees.add(normalized);
+  return normalized;
+}
+
+function promptForAssigneeName(current = "") {
+  let value = null;
+  let promptUnsupported = false;
+  try {
+    value = window.prompt("Add assignee name", current);
+  } catch {
+    promptUnsupported = true;
+  }
+  if (promptUnsupported) {
+    return addCustomAssigneeName(`New Assignee ${customAssignees.size + 1}`);
+  }
+  return addCustomAssigneeName(value);
+}
+
+function handleAssigneeSelection(sel, leadId) {
+  const selected = sel.value;
+  if (selected !== ADD_ASSIGNEE_VALUE) {
+    onAssign(leadId, { assigned_to: selected }, sel);
+    return;
+  }
+
+  const added = promptForAssigneeName();
+  if (!added) {
+    const fallback = sel.dataset.prevValue || "";
+    sel.value = fallback;
+    updateAssignPickerFace(sel);
+    return;
+  }
+
+  let existing = [...sel.options].find((opt) => opt.value === added);
+  if (!existing) {
+    existing = document.createElement("option");
+    existing.value = added;
+    existing.textContent = added;
+    sel.insertBefore(existing, sel.querySelector(`option[value="${ADD_ASSIGNEE_VALUE}"]`));
+  }
+  sel.value = added;
+  sel.dataset.prevValue = added;
+  updateAssignPickerFace(sel);
+  onAssign(leadId, { assigned_to: added }, sel);
 }
 
 function queueAssignFaceLabel(lead) {
@@ -1653,10 +1931,12 @@ function wireAssignSelects(root) {
   scope.querySelectorAll(".assign-select--queue").forEach((sel) => {
     sel.addEventListener("click", (e) => e.stopPropagation());
     sel.addEventListener("keydown", (e) => e.stopPropagation());
+    sel.addEventListener("focus", () => {
+      sel.dataset.prevValue = sel.value || "";
+    });
     sel.addEventListener("change", (e) => {
       e.stopPropagation();
-      updateAssignPickerFace(sel);
-      onAssign(sel.dataset.leadId, { assigned_to: sel.value }, sel);
+      handleAssigneeSelection(sel, sel.dataset.leadId);
     });
   });
 }
@@ -2362,8 +2642,11 @@ function renderDetailShell(lead) {
     </section>
   `;
 
+  $("#detailAssignee")?.addEventListener("focus", (e) => {
+    e.target.dataset.prevValue = e.target.value || "";
+  });
   $("#detailAssignee")?.addEventListener("change", (e) =>
-    onAssign(leadKey(lead), { assigned_to: e.target.value }, e.target)
+    handleAssigneeSelection(e.target, leadKey(lead))
   );
   $("#detailNotes").addEventListener("blur", (e) =>
     onAssign(leadKey(lead), { notes: e.target.value }, e.target)
@@ -2553,6 +2836,8 @@ function applyEnvBadgeFallback() {
   if (!raw.includes("{{ENV_BADGE")) return;
   el.textContent = "LOCAL PREVIEW";
   el.classList.remove("env-badge--live");
+  el.classList.remove("env-badge--demo");
+  el.classList.remove("env-badge--hybrid");
   el.classList.add("env-badge--dev");
 }
 
