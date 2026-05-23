@@ -5111,6 +5111,115 @@ body.decision-ui {
   }
 }
 
+/* Phase 11 production coherence overrides */
+.decision-ui {
+  --phase11-surface: #f8fbff;
+  --phase11-border: rgba(21, 48, 82, 0.11);
+  --phase11-shadow: 0 10px 24px rgba(16, 34, 58, 0.08);
+}
+
+.decision-ui .queue-tabs {
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--phase11-border);
+  box-shadow: 0 6px 18px rgba(13, 33, 58, 0.08);
+}
+
+.decision-ui .queue-guidance {
+  margin-top: 0.18rem;
+  margin-bottom: 0.42rem;
+  font-size: 0.71rem;
+  color: #6e829d;
+}
+
+.decision-ui .table-panel,
+.decision-ui .introducers-panel .table-panel {
+  background: linear-gradient(180deg, #ffffff 0%, var(--phase11-surface) 100%);
+  border: 1px solid var(--phase11-border);
+  box-shadow: var(--phase11-shadow);
+}
+
+.decision-ui .table-wrap--soft {
+  border: 1px solid rgba(22, 48, 81, 0.1);
+  border-radius: 14px;
+}
+
+.decision-ui #leadsTable thead th,
+.decision-ui #introducersTable thead th {
+  background: #f1f6fd;
+  letter-spacing: 0.01em;
+}
+
+.decision-ui .table-empty-state {
+  border: 1px dashed rgba(32, 70, 111, 0.18);
+  background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+}
+
+.decision-ui .table-empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.52rem;
+  justify-content: center;
+}
+
+.decision-ui .provenance-panel {
+  border: 1px solid var(--phase11-border);
+  box-shadow: 0 8px 18px rgba(11, 31, 56, 0.06);
+}
+
+.decision-ui .provenance-panel__items {
+  row-gap: 0.42rem;
+}
+
+.decision-ui .detail-panel {
+  border-left: 1px solid rgba(26, 52, 86, 0.14);
+  box-shadow: -20px 0 40px rgba(10, 25, 45, 0.16);
+}
+
+.decision-ui .detail-header {
+  border-bottom: 1px solid rgba(29, 58, 95, 0.12);
+}
+
+.decision-ui .detail-body {
+  background: linear-gradient(180deg, #fbfdff 0%, #f3f8ff 100%);
+}
+
+@media (max-width: 1080px) {
+  .decision-ui .queue-tabs {
+    top: calc(var(--sticky-top) + 0.16rem);
+  }
+
+  .decision-ui .panel-head {
+    gap: 0.55rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .decision-ui .queue-tabs {
+    top: calc(var(--sticky-top) - 0.2rem);
+    padding: 0.24rem;
+  }
+
+  .decision-ui .queue-tabs__btn {
+    font-size: 0.76rem;
+    padding: 0.5rem 0.58rem;
+  }
+
+  .decision-ui .panel-head h2,
+  .decision-ui .panel-title {
+    font-size: 1rem;
+  }
+
+  .decision-ui .lead-row td {
+    padding-top: 0.68rem;
+    padding-bottom: 0.68rem;
+  }
+
+  .decision-ui .detail-panel {
+    width: min(100vw, 96vw);
+    max-width: 96vw;
+  }
+}
+
 /* Phase 10.6: Editorial intelligence and premium interaction refinement */
 .decision-ui {
   --editorial-ink: #1b2a3d;

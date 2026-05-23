@@ -15,7 +15,7 @@
   <body class="decision-ui">
     <div class="loading-overlay" id="loadingOverlay" hidden role="status" aria-live="assertive" aria-busy="false">
       <div class="spinner" aria-hidden="true"></div>
-      <p id="loadingText">Loading prepared snapshot…</p>
+      <p id="loadingText">Loading operational intelligence…</p>
     </div>
 
     <header class="header header--minimal">
@@ -29,13 +29,13 @@
           <span class="env-badge {{ENV_BADGE_CLASS}}" id="envBadge">{{ENV_BADGE}}</span>
         </div>
         <div class="header-actions">
-          <div class="header-date-nav" id="dateNav" aria-label="Navigate prepared snapshots">
-            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous prepared snapshot" title="Previous prepared snapshot"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-left"/></svg></button>
+          <div class="header-date-nav" id="dateNav" aria-label="Navigate operational dates">
+            <button type="button" class="btn-icon" id="datePrev" aria-label="Previous operational date" title="Previous operational date"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-left"/></svg></button>
             <label class="header-date">
               <span class="visually-hidden">Snapshot date</span>
               <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
             </label>
-            <button type="button" class="btn-icon" id="dateNext" aria-label="Next prepared snapshot" title="Next prepared snapshot"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-right"/></svg></button>
+            <button type="button" class="btn-icon" id="dateNext" aria-label="Next operational date" title="Next operational date"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-right"/></svg></button>
           </div>
           <!--@DEV_ONLY:START-->
           <button type="button" class="btn-icon" id="refreshBtn" aria-label="Build snapshot from registries (dev)" title="Build snapshot from registries (dev)"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
@@ -51,7 +51,7 @@
     </header>
 
     <div class="trust-strip" id="trustStrip" role="status" aria-live="polite">
-      <div class="trust-strip__inner" id="trustStripInner">Checking prepared snapshot status…</div>
+      <div class="trust-strip__inner" id="trustStripInner">Checking operational status…</div>
     </div>
 
     <div class="shell">
@@ -95,7 +95,7 @@
         </div>
         <div class="decision-hero__action">
           <button type="button" class="btn btn-primary btn-lg" id="reviewHighPriorityBtn">Open Priority Queue</button>
-          <p id="dateSelectEmpty" class="date-empty-msg" hidden>No snapshots available</p>
+          <p id="dateSelectEmpty" class="date-empty-msg" hidden>No operational dates available</p>
         </div>
       </section>
 
@@ -171,7 +171,7 @@
                 </tr>
               </thead>
               <tbody id="leadsBody">
-                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading prepared snapshot…</p></div></td></tr>
+                <tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state"><p class="table-empty-state__text">Loading operational intelligence…</p></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -217,7 +217,7 @@
       </section>
 
       <footer class="ops-footer" id="opsFooter" aria-label="Application information">
-        <p class="ops-footer__line">Prepared operational snapshot · snapshot-first queue</p>
+        <p class="ops-footer__line">Latest validated operational intelligence · continuity-first queue</p>
         <p class="ops-footer__version">Operational Queue v1</p>
       </footer>
     </div>

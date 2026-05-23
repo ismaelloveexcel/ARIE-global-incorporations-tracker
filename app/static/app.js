@@ -21,6 +21,7 @@ let availableDates = [];
 let calendarDates = [];
 let dateDetails = [];
 let currentDate = "";
+let activeDateMessage = "";
 let openLeadId = null;
 let detailLead = null;
 let bannerHideTimer = null;
@@ -61,6 +62,68 @@ let datesApiOk = true;
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function isIsoDateString(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim());
+}
+
+function requestedDateFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const value = params.get("date") || "";
+    return isIsoDateString(value) ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+function syncUrlDateParam(date) {
+  try {
+    const url = new URL(window.location.href);
+    if (date) url.searchParams.set("date", date);
+    else url.searchParams.delete("date");
+    window.history.replaceState({}, "", url);
+  } catch {
+    // Ignore URL sync failures in restricted environments.
+  }
+}
+
+function nearestAvailableDateFromList(dates, targetDate) {
+  if (!targetDate || !dates.length) return "";
+  if (dates.includes(targetDate)) return targetDate;
+  for (const d of dates) {
+    if (d < targetDate) return d;
+  }
+  return dates[dates.length - 1] || "";
+}
+
+function resolveBootstrapDate(recommended, requestedDate) {
+  if (requestedDate && availableDates.includes(requestedDate)) {
+    return { date: requestedDate, message: "" };
+  }
+
+  const fallbackDate =
+    nearestAvailableDateFromList(availableDates, requestedDate) ||
+    recommended ||
+    availableDates[0] ||
+    "";
+
+  if (requestedDate && fallbackDate && fallbackDate !== requestedDate) {
+    return {
+      date: fallbackDate,
+      message: `Displaying latest validated operational intelligence from ${formatDisplayDate(fallbackDate)}.`,
+    };
+  }
+
+  if (!requestedDate && fallbackDate) {
+    return {
+      date: fallbackDate,
+      message: "Latest validated operational intelligence loaded.",
+    };
+  }
+
+  return { date: fallbackDate, message: "" };
 }
 
 function pipelineCommandToday() {
@@ -378,7 +441,7 @@ function renderQueueSummaryMetrics(statsEl, metrics) {
   const total = Number(m.total_leads) || 0;
   if (!total && !allLeads.length) {
     statsEl.innerHTML =
-      '<p class="queue-summary__empty muted">Load a prepared snapshot to see queue totals.</p>';
+      '<p class="queue-summary__empty muted">Latest validated operational intelligence will appear here automatically.</p>';
     return;
   }
   const uk = Number(m.uk_count) || 0;
@@ -617,11 +680,15 @@ async function loadAvailableDates() {
     canFetchUk = !!data.can_fetch_uk;
     canFetchMauritius = !!data.can_fetch_mauritius;
     const recommended = data.recommended || availableDates[0] || "";
-    if (recommended) currentDate = recommended;
+    const requestedDate = currentDate || requestedDateFromUrl();
+    const resolved = resolveBootstrapDate(recommended, requestedDate);
+    if (resolved.date) currentDate = resolved.date;
+    activeDateMessage = resolved.message || "";
     appHasDates = availableDates.length > 0;
     syncSnapshotControls();
     updateDateNavButtons();
-    return appHasDates ? recommended : currentDate || "";
+    if (currentDate) syncUrlDateParam(currentDate);
+    return appHasDates ? currentDate || recommended : currentDate || "";
   } catch {
     datesApiOk = false;
     availableDates = [];
@@ -700,12 +767,7 @@ function dateOptionLabel(d) {
 }
 
 function nearestAvailableDate(targetDate) {
-  if (!targetDate || !availableDates.length) return "";
-  if (availableDates.includes(targetDate)) return targetDate;
-  for (const d of availableDates) {
-    if (d < targetDate) return d;
-  }
-  return availableDates[availableDates.length - 1] || "";
+  return nearestAvailableDateFromList(availableDates, targetDate);
 }
 
 function dateToneForTimeline(date, statusData) {
@@ -944,8 +1006,8 @@ function syncSnapshotControls() {
     sel.innerHTML = "";
     emptyEl.hidden = false;
     emptyEl.textContent = datesApiOk
-      ? "Snapshot dates unavailable — reload the page"
-      : "Snapshot dates unavailable — contact operations";
+      ? "Operational dates unavailable — reload the page"
+      : "Operational dates unavailable — contact operations";
     if (nav) nav.classList.add("header-date-nav--disabled");
     renderDateHistory(lastDataStatus);
     return;
@@ -988,17 +1050,17 @@ function renderQueueHero(payload) {
   const d = payload?.incorporation_date || getCurrentDate();
 
   if (!d) {
-    dateEl.textContent = appHasDates ? "Choose a snapshot date" : "No snapshot loaded yet";
+    dateEl.textContent = appHasDates ? "Operational intelligence" : "Operational intelligence unavailable";
     if (refreshedEl) {
       refreshedEl.textContent = appHasDates
-        ? "Pick a date in the header to load leads"
+        ? "Latest validated operational intelligence will appear automatically"
         : isProductionMode
-          ? "Choose a snapshot date — contact operations if data is missing"
-          : "Run the overnight pipeline or build a snapshot in Settings (dev)";
+          ? "No validated operational data is currently available — contact operations"
+          : "Run the overnight pipeline or build operational data in Settings (dev)";
     }
     if (statsEl) {
       statsEl.innerHTML =
-          '<p class="queue-summary__empty muted">Pick a snapshot date to load the pipeline.</p>';
+          '<p class="queue-summary__empty muted">Operational intelligence will populate automatically when validated data is available.</p>';
     }
     updateHeroMetaLine();
     return;
@@ -1023,6 +1085,7 @@ function renderQueueHero(payload) {
         ? formatTrustGenerated(snapshotTs)
         : "";
     const parts = [];
+    if (activeDateMessage) parts.push(activeDateMessage);
     if (refreshed) parts.push(refreshed);
     if (lastDataStatus?.freshness?.state === "stale") {
       parts.push("Stale snapshot");
@@ -1074,7 +1137,7 @@ function updateDateNavButtons() {
   $("#dateNext").disabled = idx <= 0;
 }
 
-/** Prev/next move along prepared snapshots only (availableDates), never calendar padding. */
+/** Prev/next move along available operational dates only, never calendar padding. */
 function navigateDate(delta) {
   if (!availableDates.length) return;
   const idx = availableDates.indexOf(getCurrentDate());
@@ -1089,6 +1152,8 @@ function navigateDate(delta) {
 
 function setSelectedDate(date) {
   currentDate = date;
+  activeDateMessage = "";
+  syncUrlDateParam(date);
   if ($("#dateSelect") && !$("#dateSelect").hidden) {
     $("#dateSelect").value = date;
   }
@@ -1148,7 +1213,7 @@ function setPanelSubtitle(text) {
 function renderQueueZeroState() {
   renderQueueHero({ incorporation_date: getCurrentDate() || null });
   renderExecutiveQuickBar();
-  setPanelSubtitle(appHasDates ? "" : "No snapshot data in this environment");
+  setPanelSubtitle(appHasDates ? "" : "No operational data in this environment");
   const notice = $("#mauritiusMissingNotice");
   if (notice) notice.hidden = true;
   updateTabGuidance();
@@ -1166,8 +1231,8 @@ function updateMauritiusNotice(payload) {
   const ukCount = Number(payload?.metrics?.uk_count) || 0;
   if (missing && ukCount > 0) {
     text.textContent = isProductionMode
-      ? "This prepared snapshot has no Mauritius GBC/AC companies. United Kingdom leads are still available. Contact operations if you expected Mauritius rows for this date."
-      : "This prepared snapshot has no Mauritius GBC/AC companies yet. United Kingdom leads are still available. Operations can add Mauritius rows via the overnight pipeline.";
+      ? "Mauritius GBC/AC companies are not available for this operational date. United Kingdom leads remain available. Contact operations if you expected Mauritius rows."
+      : "Mauritius GBC/AC companies are not available for this operational date yet. United Kingdom leads remain available. Operations can add Mauritius rows via the overnight pipeline.";
     notice.hidden = false;
   } else {
     notice.hidden = true;
@@ -1238,7 +1303,7 @@ function renderNoEnvironmentDataBanner() {
   el.hidden = false;
   if (isProductionMode) {
     el.innerHTML =
-      '<p class="data-status-text">⚠ No incorporation snapshot is available in this environment yet. Try another date or contact operations.</p>';
+      '<p class="data-status-text">⚠ No validated operational intelligence is available in this environment yet. Contact operations if this continues.</p>';
     return;
   }
   const cmd = pipelineCommandToday();
@@ -1340,7 +1405,7 @@ function showQueueLoadError(message) {
   const el = $("#queueErrorBanner");
   if (!el) return;
   el.hidden = false;
-  el.innerHTML = `<p><strong>Unable to load snapshot data.</strong> ${escapeHtml(
+  el.innerHTML = `<p><strong>Unable to load operational data.</strong> ${escapeHtml(
     operatorSafeErrorMessage(message)
   )}</p>`;
 }
@@ -1364,8 +1429,8 @@ function renderTableStateCell(title, text, actionsHtml = "") {
 
 function showTableLoadingState() {
   renderTableStateCell(
-    "Loading prepared snapshot…",
-    "Loading prepared snapshot for the selected date."
+    "Loading operational intelligence…",
+    "Loading validated operational data for the selected date."
   );
 }
 
@@ -1379,8 +1444,8 @@ function showTableQuietDayState() {
 
 function showTableErrorState() {
   renderTableStateCell(
-    "Unable to load snapshot data",
-    "Select another snapshot date or contact operations."
+    "Unable to load operational data",
+    "Try another operational date or contact operations."
   );
 }
 
@@ -1391,37 +1456,37 @@ function showTableEmptyState() {
   const nearest = nearestAvailableDate(date);
   const canLoad =
     operatorRefreshAllowed && canFetchUk && hasCompaniesHouseKey && date && !detail.has_snapshot;
-  let title = "No prepared snapshots available";
+  let title = "No validated operational data available";
   if (date && detail.has_snapshot) {
     title = "Quiet day — no leads in this queue";
   } else if (date) {
-    title = "No snapshot for this date";
+    title = "No operational data for this date";
   }
   let text;
   let primaryBtn = "";
   let secondaryLink = "";
   if (!appHasDates && !date) {
     text =
-      "The overnight pipeline has not yet produced a snapshot for review.";
+      "No validated operational intelligence is available for review yet.";
     if (!isProductionMode) {
       text +=
-        " Run the ingestion pipeline or place a prepared export in exports/YYYY-MM-DD.csv.";
+        " Run the ingestion pipeline or place an operational export in exports/YYYY-MM-DD.csv.";
     }
   } else if (isProductionMode) {
     text =
-      "The overnight pipeline has not yet produced a snapshot for this date. Try another date or contact operations.";
+      "Validated operational intelligence is not available for this date. Try another date or contact operations.";
     if (date && nearest && nearest !== date) {
-      text = `No published snapshot exists for ${formatDisplayDate(date)}. The nearest available operational snapshot is ${formatDisplayDate(nearest)}.`;
+      text = `No validated operational data exists for ${formatDisplayDate(date)}. Showing the nearest available operational date, ${formatDisplayDate(nearest)}.`;
     }
   } else if (canLoad) {
     text =
-      "The overnight pipeline has not yet produced a snapshot for this date. Use the date menu to pick another day, or load UK register data for this date.";
+      "Validated operational intelligence is not available for this date. Use the date menu to pick another day, or load UK register data for this date.";
     primaryBtn = `<button type="button" class="btn btn-primary" id="emptyRefreshData">Load UK data for this date</button>`;
     secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
   } else {
     text =
-      "The overnight pipeline has not yet produced a snapshot for this date. Run the ingestion pipeline or place a prepared export in exports/YYYY-MM-DD.csv.";
-    primaryBtn = `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Build snapshot (dev)</button>`;
+      "Validated operational intelligence is not available for this date. Run the ingestion pipeline or place an operational export in exports/YYYY-MM-DD.csv.";
+    primaryBtn = `<button type="button" class="btn btn-secondary" id="emptyRefreshData">Build operational data (dev)</button>`;
     secondaryLink = `<a class="btn btn-ghost" href="/dev#health" target="_blank" rel="noopener">Operations health →</a>`;
   }
 
@@ -2333,7 +2398,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
     return;
   }
   hideQueueLoadError();
-  setLoading(true, refresh ? "Building snapshot from registry…" : "Loading prepared snapshot…");
+  setLoading(true, refresh ? "Building snapshot from registry…" : "Loading operational intelligence…");
   showTableLoadingState();
   const normalizedTab = queueTab || DEFAULT_QUEUE_TAB;
   const base = `incorporation_date=${encodeURIComponent(date)}&tab=${encodeURIComponent(normalizedTab)}`;
@@ -2358,6 +2423,17 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
         return fetchLeads(true, false, normalizedTab);
       }
     }
+    if (!res.ok && !refresh && res.status === 404 && availableDates.length) {
+      const fallbackDate = nearestAvailableDate(date) || availableDates[0] || "";
+      if (fallbackDate && fallbackDate !== date) {
+        currentDate = fallbackDate;
+        activeDateMessage = `Displaying latest validated operational intelligence from ${formatDisplayDate(fallbackDate)}.`;
+        syncSnapshotControls();
+        updateDateNavButtons();
+        syncUrlDateParam(fallbackDate);
+        return fetchLeads(false, false, normalizedTab);
+      }
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || res.statusText);
@@ -2376,6 +2452,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
       syncSnapshotControls();
       refreshDateSelectLabels();
       updateDateNavButtons();
+      syncUrlDateParam(currentDate);
     }
     if ($("#dateSelect") && !$("#dateSelect").hidden) {
       $("#dateSelect").value = currentDate;
@@ -2398,8 +2475,8 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
     }
     showToast(
       refresh
-        ? `Snapshot updated — ${data.count} candidates in view`
-        : `Prepared snapshot loaded — ${data.count} candidates`
+        ? `Operational data updated — ${data.count} candidates in view`
+        : `Operational intelligence loaded — ${data.count} candidates`
     );
   } catch (e) {
     const msg = operatorSafeErrorMessage(e.message);
