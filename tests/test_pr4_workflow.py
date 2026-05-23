@@ -19,7 +19,7 @@ def development_mode(monkeypatch):
 
 def test_loading_copy_in_index():
     html = INDEX_HTML.read_text(encoding="utf-8")
-    assert "Loading prepared snapshot…" in html
+    assert "Loading operational intelligence…" in html
     assert "Retrieving incorporation records" not in html
 
 
@@ -47,8 +47,8 @@ def test_provenance_phrases_standardized_in_app_js():
 
 def test_empty_state_copy_in_app_js():
     js = APP_JS.read_text(encoding="utf-8")
-    assert "No prepared snapshots available" in js
-    assert "The overnight pipeline has not yet produced a snapshot for review." in js
+    assert "No validated operational data available" in js
+    assert "Validated operational intelligence is not available for this date." in js
     assert "No candidate entities match the current filters." in js
     assert "Try clearing search or jurisdiction filters." in js
 

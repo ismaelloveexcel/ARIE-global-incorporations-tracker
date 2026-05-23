@@ -50,7 +50,7 @@ def test_production_index_served_over_http(production_mode):
     assert "devOpsLink" not in html
     assert "demoMode" not in html
     assert "muPipelineCmd" not in html
-    assert "Previous prepared snapshot" in html
+    assert "Previous operational date" in html
     assert "Export current view" in html
     assert "Onboarding Intelligence Platform" in html
 

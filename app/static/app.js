@@ -60,6 +60,64 @@ let filterState = createDefaultFilterState();
 let appHasDates = false;
 let datesApiOk = true;
 
+const UI_STATE_KEYS = {
+  queueTab: "arie.queueTab",
+  date: "arie.currentDate",
+  windowScrollY: "arie.windowScrollY",
+  tableScrollTop: "arie.tableScrollTop",
+};
+
+function safeSessionGet(key) {
+  try {
+    return window.sessionStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function safeSessionSet(key, value) {
+  try {
+    window.sessionStorage.setItem(key, String(value ?? ""));
+  } catch {
+    // Ignore storage failures in restricted environments.
+  }
+}
+
+function persistOperationalUiState() {
+  safeSessionSet(UI_STATE_KEYS.queueTab, activeQueueView || DEFAULT_QUEUE_TAB);
+  if (currentDate) safeSessionSet(UI_STATE_KEYS.date, currentDate);
+}
+
+function restorePersistedQueueTab() {
+  const value = safeSessionGet(UI_STATE_KEYS.queueTab);
+  return value === "introducers" ? "introducers" : DEFAULT_QUEUE_TAB;
+}
+
+function restorePersistedDate() {
+  const fromUrl = requestedDateFromUrl();
+  if (fromUrl) return "";
+  const saved = safeSessionGet(UI_STATE_KEYS.date);
+  return isIsoDateString(saved) ? saved : "";
+}
+
+function persistScrollState() {
+  const tableWrap = document.querySelector(".table-wrap");
+  safeSessionSet(UI_STATE_KEYS.windowScrollY, Math.max(0, Math.round(window.scrollY || 0)));
+  safeSessionSet(UI_STATE_KEYS.tableScrollTop, Math.max(0, Math.round(tableWrap?.scrollTop || 0)));
+}
+
+function restoreScrollState() {
+  const windowY = Number(safeSessionGet(UI_STATE_KEYS.windowScrollY));
+  const tableTop = Number(safeSessionGet(UI_STATE_KEYS.tableScrollTop));
+  if (!Number.isNaN(windowY) && windowY > 0) {
+    window.scrollTo({ top: windowY, behavior: "auto" });
+  }
+  const tableWrap = document.querySelector(".table-wrap");
+  if (tableWrap && !Number.isNaN(tableTop) && tableTop > 0) {
+    tableWrap.scrollTop = tableTop;
+  }
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -161,9 +219,9 @@ function escapeHtml(s) {
 
 function operatorSafeErrorMessage(raw) {
   const msg = String(raw || "").trim();
-  if (!msg) return "Unable to load this snapshot. Contact operations if this continues.";
+  if (!msg) return "Unable to load operational intelligence. Contact operations if this continues.";
   if (msg.length > 160 || /traceback|exception|errno|syntaxerror|typeerror/i.test(msg)) {
-    return "Unable to load this snapshot. Contact operations if this continues.";
+    return "Unable to load operational intelligence. Contact operations if this continues.";
   }
   return msg;
 }
@@ -352,7 +410,7 @@ function formatRefreshed(iso) {
 
 function scrollToLeadQueue() {
   const n = queueScopedLeads(getFilteredLeads()).length;
-  if (!n) showToast("No candidates in this snapshot", true);
+  if (!n) showToast("No candidates available for this operational date", true);
   document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -619,8 +677,8 @@ function applyOperationalMode(meta) {
     refreshBtn.hidden = !operatorRefreshAllowed;
     refreshBtn.disabled = !operatorRefreshAllowed;
     refreshBtn.title = operatorRefreshAllowed
-      ? "Engineering: build UK snapshot into exports/ (dev only)"
-      : "Snapshots are prepared overnight — contact operations if a date is missing";
+      ? "Engineering: load UK operational data into exports/ (dev only)"
+      : "Operational data is prepared overnight — contact operations if a date is missing";
   }
 
   const badge = $("#envBadge");
@@ -680,14 +738,18 @@ async function loadAvailableDates() {
     canFetchUk = !!data.can_fetch_uk;
     canFetchMauritius = !!data.can_fetch_mauritius;
     const recommended = data.recommended || availableDates[0] || "";
-    const requestedDate = currentDate || requestedDateFromUrl();
+    const restoredDate = restorePersistedDate();
+    const requestedDate = currentDate || requestedDateFromUrl() || restoredDate;
     const resolved = resolveBootstrapDate(recommended, requestedDate);
     if (resolved.date) currentDate = resolved.date;
     activeDateMessage = resolved.message || "";
     appHasDates = availableDates.length > 0;
     syncSnapshotControls();
     updateDateNavButtons();
-    if (currentDate) syncUrlDateParam(currentDate);
+    if (currentDate) {
+      syncUrlDateParam(currentDate);
+      persistOperationalUiState();
+    }
     return appHasDates ? currentDate || recommended : currentDate || "";
   } catch {
     datesApiOk = false;
@@ -874,11 +936,11 @@ function renderDateHistory(statusData = null) {
   const detail = dateDetail(current);
   const nearest = nearestAvailableDate(current);
   if (!current) {
-    narrativeEl.textContent = "Select a published date to anchor this briefing.";
+    narrativeEl.textContent = "Select an operational date to anchor this briefing.";
   } else if (!detail.has_snapshot && nearest && nearest !== current) {
-    narrativeEl.textContent = `No published file exists for ${formatDisplayDate(current)}. The nearest available date is ${formatDisplayDate(nearest)}.`;
+    narrativeEl.textContent = `No operational dataset is available for ${formatDisplayDate(current)}. The nearest available date is ${formatDisplayDate(nearest)}.`;
   } else if (statusData?.freshness?.state === "stale") {
-    narrativeEl.textContent = `You are viewing ${formatDisplayDate(current)}. This snapshot is stale, so continue with fallback-aware review before escalation.`;
+    narrativeEl.textContent = `You are viewing ${formatDisplayDate(current)}. This operational dataset is stale, so continue with fallback-aware review before escalation.`;
   } else {
     narrativeEl.textContent = `You are viewing ${formatDisplayDate(current)}. Earlier dates remain available above for quiet context.`;
   }
@@ -900,7 +962,7 @@ function renderTrustPanel(statusData) {
   const el = $("#trustPanelText");
   if (!el) return;
   const statement = statusData?.executive?.trust_statement ||
-    "Published snapshot validated.";
+    "Operational intelligence validated.";
   const concise = (statement.split(". ")[0] || statement).replace("This platform only displays ", "");
   el.textContent = concise.endsWith(".") ? concise : `${concise}.`;
 }
@@ -933,7 +995,7 @@ function renderExecutiveStatusCard(statusData) {
   const narrative = narrativeRaw.split(". ")[0] || narrativeRaw;
   const deltaLine = delta?.available && Array.isArray(delta.highlights) && delta.highlights.length
     ? delta.highlights[0]
-    : "Change intelligence will appear after the next published comparison point.";
+    : "Change intelligence will appear after the next operational comparison point.";
   const recommendation = actionability.recommended_next_step || "Continue standard review cadence.";
   const incidentDetail = [
     actionability.what_happened,
@@ -1154,6 +1216,7 @@ function setSelectedDate(date) {
   currentDate = date;
   activeDateMessage = "";
   syncUrlDateParam(date);
+  persistOperationalUiState();
   if ($("#dateSelect") && !$("#dateSelect").hidden) {
     $("#dateSelect").value = date;
   }
@@ -1372,7 +1435,7 @@ function renderTrustStrip(statusData) {
 
   const snapshotLabel = date ? formatDisplayDate(date) : "—";
   el.innerHTML = `
-    <span class="trust-strip__item trust-strip__item--snapshot"><strong>${escapeHtml(snapshotLabel)}</strong> · Published ${formatTrustGenerated(generatedIso)}</span>
+    <span class="trust-strip__item trust-strip__item--snapshot"><strong>${escapeHtml(snapshotLabel)}</strong> · Operational date ${formatTrustGenerated(generatedIso)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
     <span class="trust-strip__item trust-strip__item--source">${escapeHtml(sourceLabel)}</span>
     <span class="trust-strip__sep" aria-hidden="true">|</span>
@@ -1438,7 +1501,7 @@ function showTableQuietDayState() {
   const dateLabel = formatDisplayDate(getCurrentDate());
   renderTableStateCell(
     "Quiet day",
-    `The ${dateLabel} snapshot exists but has no candidate entities in this queue.`
+    `The ${dateLabel} operational dataset is available but has no candidate entities in this queue.`
   );
 }
 
@@ -2008,6 +2071,7 @@ function wireAssignSelects(root) {
 
 function setQueueView(view) {
   activeQueueView = view;
+  persistOperationalUiState();
   const isDirect = view === "direct_clients";
   const directPanel = $("#directClientsView");
   const introPanel = $("#introducersView");
@@ -2173,7 +2237,7 @@ function renderIntroducersView() {
   `;
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state table-empty-state--inline"><h3 class="table-empty-state__title">No introducer candidates in this snapshot.</h3><p class="table-empty-state__text">Switch to Candidate Entities or choose another date.</p></div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="5" class="empty-state-cell"><div class="table-empty-state table-empty-state--inline"><h3 class="table-empty-state__title">No introducer candidates for this operational date.</h3><p class="table-empty-state__text">Switch to Candidate Entities or choose another date.</p></div></td></tr>`;
     return;
   }
 
@@ -2360,7 +2424,7 @@ async function fetchMauritiusIfNeeded(payload, allowAuto = true, queueTab = acti
   const date = getCurrentDate();
   if (!date) return payload;
 
-  setLoading(true, "Loading Mauritius snapshot…");
+  setLoading(true, "Loading Mauritius operational data…");
   const normalizedTab = queueTab || DEFAULT_QUEUE_TAB;
   const base = `incorporation_date=${encodeURIComponent(date)}&tab=${encodeURIComponent(normalizedTab)}`;
   try {
@@ -2398,7 +2462,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
     return;
   }
   hideQueueLoadError();
-  setLoading(true, refresh ? "Building snapshot from registry…" : "Loading operational intelligence…");
+  setLoading(true, refresh ? "Loading operational data from registry…" : "Loading operational intelligence…");
   showTableLoadingState();
   const normalizedTab = queueTab || DEFAULT_QUEUE_TAB;
   const base = `incorporation_date=${encodeURIComponent(date)}&tab=${encodeURIComponent(normalizedTab)}`;
@@ -2453,6 +2517,7 @@ async function fetchLeads(refresh = false, allowAutoFetch = true, queueTab = act
       refreshDateSelectLabels();
       updateDateNavButtons();
       syncUrlDateParam(currentDate);
+      persistOperationalUiState();
     }
     if ($("#dateSelect") && !$("#dateSelect").hidden) {
       $("#dateSelect").value = currentDate;
@@ -2995,11 +3060,23 @@ function init() {
 
   const header = $(".header");
   const tableWrap = document.querySelector(".table-wrap");
+  const restoredQueueTab = restorePersistedQueueTab();
+  let scrollPersistTicking = false;
+
+  function queueScrollPersist() {
+    if (scrollPersistTicking) return;
+    scrollPersistTicking = true;
+    window.requestAnimationFrame(() => {
+      persistScrollState();
+      scrollPersistTicking = false;
+    });
+  }
 
   function handleScroll() {
     const scrolled =
       window.scrollY > 60 || (tableWrap && tableWrap.scrollTop > 60);
     header?.classList.toggle("header--compact", scrolled);
+    queueScrollPersist();
   }
 
   window.addEventListener("scroll", handleScroll, { passive: true });
@@ -3016,9 +3093,13 @@ function init() {
       if (!date) {
         renderMetricsZeroState();
         showTableEmptyState();
+        restoreScrollState();
         return;
       }
-      return fetchLeads(false);
+      return fetchLeads(false).then(() => {
+        if (restoredQueueTab === "introducers") setQueueView("introducers");
+        restoreScrollState();
+      });
     })
     .catch((e) => {
       console.error(e);
@@ -3029,6 +3110,18 @@ function init() {
   window.addEventListener("offline", () => {
     showToast("You appear to be offline", true);
     showConnectivityFailure();
+  });
+
+  window.addEventListener("beforeunload", () => {
+    persistOperationalUiState();
+    persistScrollState();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      persistOperationalUiState();
+      persistScrollState();
+    }
   });
 }
 

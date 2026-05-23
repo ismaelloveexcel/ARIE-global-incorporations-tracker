@@ -30,14 +30,14 @@ def test_pilot_runbook_exists():
 def test_footer_in_index():
     html = INDEX.read_text(encoding="utf-8")
     assert 'id="opsFooter"' in html
-    assert "Prepared operational snapshot" in html
+    assert "Latest validated operational intelligence" in html
     assert "Operational Queue v1" in html
-    assert "snapshot-first queue" in html
+    assert "continuity-first queue" in html
 
 
 def test_empty_state_wording_in_app_js():
     js = APP_JS.read_text(encoding="utf-8")
-    assert "No prepared snapshots available" in js
+    assert "No validated operational data available" in js
     assert "No candidate entities match the current filters." in js
     assert "operatorSafeErrorMessage" in js
     assert "try again later" not in js.lower()

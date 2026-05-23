@@ -32,13 +32,13 @@
           <div class="header-date-nav" id="dateNav" aria-label="Navigate operational dates">
             <button type="button" class="btn-icon" id="datePrev" aria-label="Previous operational date" title="Previous operational date"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-left"/></svg></button>
             <label class="header-date">
-              <span class="visually-hidden">Snapshot date</span>
-              <select id="dateSelect" class="date-select date-select--header" aria-label="Snapshot date"></select>
+              <span class="visually-hidden">Operational date</span>
+              <select id="dateSelect" class="date-select date-select--header" aria-label="Operational date"></select>
             </label>
             <button type="button" class="btn-icon" id="dateNext" aria-label="Next operational date" title="Next operational date"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-chevron-right"/></svg></button>
           </div>
           <!--@DEV_ONLY:START-->
-          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Build snapshot from registries (dev)" title="Build snapshot from registries (dev)"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
+          <button type="button" class="btn-icon" id="refreshBtn" aria-label="Load operational data from registries (dev)" title="Load operational data from registries (dev)"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-refresh"/></svg></button>
           <details class="header-utilities header-utilities--icon">
             <summary class="btn-icon" aria-label="Settings" title="Settings"><svg class="icon" width="16" height="16" aria-hidden="true"><use href="/static/icons.svg#icon-settings"/></svg></summary>
             <div class="header-utilities__panel">
@@ -72,7 +72,7 @@
           <p class="date-history__title">Recent dates</p>
         </div>
         <div class="date-history__timeline" id="dateHistoryTimeline"></div>
-        <p class="date-history__narrative" id="dateHistoryNarrative">Loading published snapshot history…</p>
+        <p class="date-history__narrative" id="dateHistoryNarrative">Loading operational history…</p>
       </section>
 
       <section class="ui-mode-switch" aria-label="Display mode">
