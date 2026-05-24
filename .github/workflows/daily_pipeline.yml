@@ -89,7 +89,7 @@ jobs:
             ARGS="$ARGS --skip-mauritius"
           fi
           DRY_RUN="${{ github.event.inputs.dry_run }}"
-          if [ "$DRY_RUN" != "false" ]; then
+          if [ "$DRY_RUN" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
