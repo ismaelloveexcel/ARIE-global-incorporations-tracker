@@ -94,7 +94,13 @@ def test_api_leads_404_without_pipeline_export(exports_dir):
     response = client.get("/api/leads", params={"incorporation_date": "2099-12-31"})
     assert response.status_code == 404
     detail = response.json()["detail"].lower()
-    assert "snapshot" in detail or "pipeline" in detail
+    assert "validated operational data" in detail
+    assert "2099-12-31" in detail
+    assert "try another date" in detail
+    assert "contact operations" in detail
+    assert "snapshot" not in detail
+    assert "pipeline" not in detail
+    assert "prepared snapshot" not in detail
 
 
 def test_api_leads_returns_uk_from_pipeline(exports_dir, monkeypatch):
@@ -113,6 +119,47 @@ def test_api_leads_returns_uk_from_pipeline(exports_dir, monkeypatch):
     assert payload["metrics"]["uk_count"] == 1
     assert payload["count"] == 1
     assert payload["leads"][0]["company_number"] == "17221824"
+
+
+def test_api_leads_without_date_uses_latest_operational_date(exports_dir):
+    exports_dir.joinpath("2026-05-20.csv").write_text(
+        PIPELINE_HEADER
+        + "Older UK,older uk,UK,ltd,2026-05-20,60,companies_house,11111111,,64209\n",
+        encoding="utf-8",
+    )
+    exports_dir.joinpath("2026-05-22.csv").write_text(
+        PIPELINE_HEADER
+        + "Latest UK,latest uk,UK,ltd,2026-05-22,80,companies_house,22222222,,64209\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/leads", params={"tab": "direct_clients"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["incorporation_date"] == "2026-05-22"
+    assert any((row.get("company_number") or "") == "22222222" for row in payload["leads"])
+
+
+def test_api_leads_falls_back_to_nearest_operational_date(exports_dir):
+    exports_dir.joinpath("2026-05-21.csv").write_text(
+        PIPELINE_HEADER
+        + "Nearest UK,nearest uk,UK,ltd,2026-05-21,75,companies_house,33333333,,64209\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/leads",
+        params={"incorporation_date": "2099-12-31", "tab": "direct_clients"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["incorporation_date"] == "2026-05-21"
+    fallback = (payload.get("meta") or {}).get("fallback") or {}
+    assert fallback.get("requested_date") == "2099-12-31"
+    assert fallback.get("resolved_date") == "2026-05-21"
+    assert fallback.get("reason") == "nearest_available_operational_date"
 
 
 def test_refresh_writes_canonical_export_and_queue_reads_it(exports_dir, monkeypatch):
@@ -203,3 +250,30 @@ def test_merge_includes_external_introducer_registry(exports_dir):
     rows, meta = merge_leads_for_date("2026-05-25")
     assert meta["external_introducer_count"] == 1
     assert any(r.get("source") == "mauritius_management_company" for r in rows)
+<<<<<<< HEAD
+=======
+
+
+def test_merge_suppresses_operational_duplicates(exports_dir):
+    exports_dir.joinpath("2026-05-26.csv").write_text(
+        PIPELINE_HEADER
+        + "UK A Ltd,uk a ltd,UK,ltd,2026-05-26,80,companies_house,123,,64209\n",
+        encoding="utf-8",
+    )
+
+    intro_dir = Path("uk_leads") / "sources"
+    intro_dir.mkdir(parents=True, exist_ok=True)
+    intro_dir.joinpath("external_introducers.csv").write_text(
+        "company_name,jurisdiction,entity_type,source,contact_email\n"
+        "Acme Corporate Services,Mauritius,Management Company,mauritius_management_company,ops@example.com\n"
+        "Acme Corporate Services,Mauritius,Management Company,mauritius_management_company,ops2@example.com\n",
+        encoding="utf-8",
+    )
+
+    rows, meta = merge_leads_for_date("2026-05-26")
+    acme = [r for r in rows if (r.get("company_name") or "") == "Acme Corporate Services"]
+    assert len(acme) == 1
+    assert acme[0].get("duplicate_group_size") == 2
+    assert acme[0].get("duplicate_suppressed_count") == 1
+    assert meta.get("duplicates_suppressed") == 1
+>>>>>>> a791f89 (test: align continuity assertions with operational wording)
