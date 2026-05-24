@@ -234,6 +234,7 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
         "external_introducer_count": 0,
         "external_introducer_path": str(EXTERNAL_INTRODUCERS_PATH),
         "warnings": [],
+        "duplicates_suppressed": 0,
     }
 
     uk_stats = uk_pipeline_export_stats(date)
@@ -267,7 +268,8 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
         meta["mauritius_export_missing"] = False
 
     merged: list[dict] = []
-    seen_ids: set[str] = set()
+    by_lead_id: dict[str, dict] = {}
+    duplicate_counts: dict[str, int] = {}
 
     for row in uk_rows + mu_rows + external_rows:
         base = dict(row)
@@ -278,10 +280,18 @@ def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
                 enriched["company_number"] = ""
         lid = lead_id(enriched)
         enriched["lead_id"] = lid
-        if lid in seen_ids:
+        if lid in by_lead_id:
+            duplicate_counts[lid] = duplicate_counts.get(lid, 1) + 1
+            meta["duplicates_suppressed"] += 1
             continue
-        seen_ids.add(lid)
+        by_lead_id[lid] = enriched
         merged.append(enriched)
+
+    for row in merged:
+        lid = row.get("lead_id") or ""
+        group_size = max(1, duplicate_counts.get(lid, 1))
+        row["duplicate_group_size"] = group_size
+        row["duplicate_suppressed_count"] = max(0, group_size - 1)
 
     merged.sort(key=lambda r: float(r.get("score") or 0), reverse=True)
     return merged, meta

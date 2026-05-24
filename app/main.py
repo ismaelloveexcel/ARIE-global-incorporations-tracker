@@ -75,6 +75,30 @@ def _guard_operator_refresh() -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 
+def _latest_operational_date() -> str | None:
+    payload = scan_available_dates()
+    recommended = payload.get("recommended")
+    if isinstance(recommended, str) and recommended.strip():
+        return recommended
+    dates = payload.get("dates") or []
+    if dates:
+        return str(dates[0])
+    return None
+
+
+def _nearest_operational_date(target_date: str) -> str | None:
+    payload = scan_available_dates()
+    dates = [d for d in (payload.get("dates") or []) if isinstance(d, str) and d]
+    if not dates:
+        return None
+    if target_date in dates:
+        return target_date
+    for d in dates:
+        if d < target_date:
+            return d
+    return dates[-1]
+
+
 def _guard_dev_only() -> None:
     if is_production():
         raise HTTPException(status_code=404, detail="Not found")
@@ -145,7 +169,7 @@ def _load_merged_rows(incorporation_date: str) -> tuple[list[dict], dict]:
 
 
 def _find_lead(lead_id_key: str, incorporation_date: str | None = None) -> dict | None:
-    d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
+    d = incorporation_date or _latest_operational_date() or (date.today() - timedelta(days=1)).isoformat()
     rows, _ = _load_merged_rows(d)
     for row in rows:
         if row.get("lead_id") == lead_id_key or row.get("company_number") == lead_id_key:
@@ -204,7 +228,7 @@ def _maybe_auto_refresh_mauritius(incorporation_date: str) -> dict | None:
 def api_data_status(
     target_date: str | None = Query(None, alias="date"),
 ):
-    d = target_date or (date.today()).isoformat()
+    d = target_date or _latest_operational_date() or (date.today()).isoformat()
     try:
         date.fromisoformat(d)
     except ValueError as exc:
@@ -243,12 +267,35 @@ def api_leads(
         description="Queue tab: direct_clients (default) or introducers.",
     ),
 ):
-    d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()
+    d = incorporation_date or _latest_operational_date() or (date.today() - timedelta(days=1)).isoformat()
     rows, meta = _load_merged_rows(d)
 
     if not rows and not pipeline_export_path(d).exists():
+        fallback = _nearest_operational_date(d)
+        if fallback and fallback != d:
+            fallback_rows, fallback_meta = _load_merged_rows(fallback)
+            if fallback_rows or pipeline_export_path(fallback).exists():
+                fallback_meta.setdefault("fallback", {})
+                fallback_meta["fallback"].update(
+                    {
+                        "requested_date": d,
+                        "resolved_date": fallback,
+                        "reason": "nearest_available_operational_date",
+                    }
+                )
+                fallback_last = refresh_meta.get_last_refresh(fallback)
+                fallback_pipe = pipeline_export_path(fallback)
+                if not fallback_last and fallback_pipe.exists():
+                    fallback_last = datetime_from_mtime(fallback_pipe)
+                return _package_response(
+                    fallback_rows,
+                    tab,
+                    fallback,
+                    fallback_meta,
+                    last_refreshed=fallback_last,
+                )
         detail = (
-            f"No incorporation snapshot is available for {d} yet. "
+            f"No validated operational data is available for {d} yet. "
             "Try another date or contact operations."
         )
         raise HTTPException(status_code=404, detail=detail)
