@@ -10,6 +10,9 @@ rapidfuzz>=3.6.1
 # Supabase Python client
 supabase>=2.4.0
 
+# PostgreSQL driver (Railway-native mode via DATABASE_URL)
+psycopg[binary]>=3.2.0
+
 # Data handling
 python-dateutil>=2.9.0
 
