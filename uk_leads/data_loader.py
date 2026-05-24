@@ -69,6 +69,96 @@ def pipeline_row_to_lead(row: dict[str, str], run_date: str) -> dict:
     return base
 
 
+def _db_source_enabled() -> bool:
+    return os.environ.get("LEAD_SOURCE", "csv").strip().lower() == "db"
+
+
+def _db_row_to_lead(row: dict) -> dict:
+    """Map a DB company row to the lead shape expected by the frontend."""
+    source = (row.get("source") or "").strip().lower()
+    raw = row.get("raw_data") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    sic_codes = raw.get("sic_codes") or []
+    if isinstance(sic_codes, str):
+        sic_codes_value = sic_codes.replace("|", ", ")
+    else:
+        sic_codes_value = ", ".join(str(code) for code in sic_codes if str(code).strip())
+
+    incorporation_date = row.get("incorporation_date")
+    run_date = str(incorporation_date or "")
+    company_number = str(raw.get("company_number") or "").strip()
+    file_no = str(raw.get("file_no") or "").strip()
+
+    lead = {
+        "run_date": run_date,
+        "company_name": str(row.get("company_name") or "").strip(),
+        "normalized_name": str(row.get("normalized_name") or "").strip(),
+        "jurisdiction": str(row.get("jurisdiction") or "").strip(),
+        "entity_type": str(row.get("entity_type") or "").strip(),
+        "incorporation_date": run_date,
+        "score": _parse_score(row.get("score")),
+        "source": source,
+        "assigned_to": "",
+        "notes": "",
+        "status": "Not contacted",
+        "company_number": company_number,
+        "file_no": file_no,
+        "sic_codes": sic_codes_value,
+        "verify_url": "",
+        "lead_id": "",
+    }
+
+    if source == "companies_house" and company_number:
+        lead["verify_url"] = f"{CH_PROFILE_BASE}{company_number}"
+    elif source == "mauritius_mns":
+        lead["verify_url"] = MU_VERIFY_URL
+
+    lead["lead_id"] = lead_id(lead)
+    return lead
+
+
+def _fetch_db_leads_for_date(incorporation_date: str) -> list[dict]:
+    from db.postgres_client import _with_pg_cursor
+
+    with _with_pg_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                company_name,
+                normalized_name,
+                jurisdiction,
+                entity_type,
+                incorporation_date,
+                score,
+                source,
+                raw_data
+            FROM companies
+            WHERE incorporation_date = %s
+            ORDER BY score DESC NULLS LAST, created_at DESC
+            """,
+            (incorporation_date,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_db_available_dates() -> list[str]:
+    from db.postgres_client import _with_pg_cursor
+
+    with _with_pg_cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT incorporation_date
+            FROM companies
+            WHERE incorporation_date IS NOT NULL
+            ORDER BY incorporation_date DESC
+            """
+        )
+        rows = cur.fetchall()
+    return [str(row.get("incorporation_date")) for row in rows if row.get("incorporation_date")]
+
+
 def _is_uk_pipeline_row(raw: dict[str, str]) -> bool:
     source = (raw.get("source") or "").strip().lower()
     if source == "companies_house":
@@ -222,7 +312,54 @@ def load_external_introducers() -> list[dict]:
     return rows
 
 
-def merge_leads_for_date(date: str) -> tuple[list[dict], dict]:
+def merge_leads_for_date(incorporation_date: str) -> tuple[list[dict], dict]:
+    """Load and merge leads for the given date using DB or CSV based on LEAD_SOURCE."""
+    if _db_source_enabled():
+        return _merge_leads_from_db(incorporation_date)
+    return _merge_leads_from_csv(incorporation_date)
+
+
+def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
+    rows = _fetch_db_leads_for_date(incorporation_date)
+    leads = [_db_row_to_lead(row) for row in rows]
+
+    merged: list[dict] = []
+    by_lead_id: dict[str, dict] = {}
+    duplicate_counts: dict[str, int] = {}
+
+    for row in leads:
+        enriched = enrich_row(dict(row))
+        if enriched.get("source") == "mauritius_mns":
+            enriched["verify_url"] = MU_VERIFY_URL
+            if not (enriched.get("company_number") or "").strip():
+                enriched["company_number"] = ""
+        lid = lead_id(enriched)
+        enriched["lead_id"] = lid
+        if lid in by_lead_id:
+            duplicate_counts[lid] = duplicate_counts.get(lid, 1) + 1
+            continue
+        by_lead_id[lid] = enriched
+        merged.append(enriched)
+
+    for row in merged:
+        lid = row.get("lead_id") or ""
+        group_size = max(1, duplicate_counts.get(lid, 1))
+        row["duplicate_group_size"] = group_size
+        row["duplicate_suppressed_count"] = max(0, group_size - 1)
+
+    meta = {
+        "source": "db",
+        "date": incorporation_date,
+        "count": len(merged),
+        "pipeline_export_missing": False,
+        "mauritius_export_missing": False,
+        "warnings": [],
+        "duplicates_suppressed": sum(max(0, c - 1) for c in duplicate_counts.values()),
+    }
+    return merged, meta
+
+
+def _merge_leads_from_csv(date: str) -> tuple[list[dict], dict]:
     """Merge UK + Mauritius rows from exports/{date}.csv (canonical pipeline snapshot)."""
     pipeline_path = pipeline_export_path(date)
     meta: dict = {
@@ -414,6 +551,39 @@ def scan_available_dates(lookback_days: int | None = None) -> dict:
     Dates the user can navigate to: rolling calendar window + any export/refresh files.
     Returns navigable dates (newest first), per-date counts, and recommended default.
     """
+    if _db_source_enabled():
+        try:
+            dates = _fetch_db_available_dates()
+            return {
+                "dates": dates,
+                "calendar_dates": dates,
+                "snapshot_dates": dates,
+                "date_details": [
+                    {
+                        "date": d,
+                        "uk_count": 0,
+                        "mauritius_count": 0,
+                        "has_uk": False,
+                        "has_mauritius": False,
+                        "has_data": True,
+                        "has_snapshot": True,
+                        "quiet_day": False,
+                        "publication_timestamp": None,
+                        "freshness_state": None,
+                        "confidence_level": None,
+                        "fallback_active": False,
+                        "archive_available": False,
+                        "mauritius_export_exists": False,
+                    }
+                    for d in dates
+                ],
+                "recommended": dates[0] if dates else None,
+                "lookback_days": lookback_days if lookback_days is not None else default_nav_lookback_days(),
+                "reason": "Most recent date with saved lead data",
+            }
+        except Exception as exc:
+            logger.warning("DB date scan failed, falling back to CSV: %s", exc)
+
     lookback = lookback_days if lookback_days is not None else default_nav_lookback_days()
     discovered = _discover_export_dates()
     refreshed = set(refresh_meta.list_refreshed_dates())
