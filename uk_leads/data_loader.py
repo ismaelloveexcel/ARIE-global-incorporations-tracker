@@ -547,42 +547,50 @@ def _date_counts_for_scan(target_date: str) -> dict:
 
 
 def scan_available_dates(lookback_days: int | None = None) -> dict:
-    """
-    Dates the user can navigate to: rolling calendar window + any export/refresh files.
-    Returns navigable dates (newest first), per-date counts, and recommended default.
-    """
-    if _db_source_enabled():
-        try:
-            dates = _fetch_db_available_dates()
-            return {
-                "dates": dates,
-                "calendar_dates": dates,
-                "snapshot_dates": dates,
-                "date_details": [
-                    {
-                        "date": d,
-                        "uk_count": 0,
-                        "mauritius_count": 0,
-                        "has_uk": False,
-                        "has_mauritius": False,
-                        "has_data": True,
-                        "has_snapshot": True,
-                        "quiet_day": False,
-                        "publication_timestamp": None,
-                        "freshness_state": None,
-                        "confidence_level": None,
-                        "fallback_active": False,
-                        "archive_available": False,
-                        "mauritius_export_exists": False,
-                    }
-                    for d in dates
-                ],
-                "recommended": dates[0] if dates else None,
-                "lookback_days": lookback_days if lookback_days is not None else default_nav_lookback_days(),
-                "reason": "Most recent date with saved lead data",
-            }
-        except Exception as exc:
-            logger.warning("DB date scan failed, falling back to CSV: %s", exc)
+    """Return available dates. Uses DB or filesystem based on LEAD_SOURCE env var."""
+    import os
+
+    if os.environ.get("LEAD_SOURCE", "csv").strip().lower() == "db":
+        from db.postgres_client import fetch_available_dates
+
+        dates = fetch_available_dates()
+        today = date.today()
+        lookback = 30
+        calendar = [
+            (today - timedelta(days=i)).isoformat()
+            for i in range(lookback)
+        ]
+        date_details = []
+        for d in calendar:
+            has = d in dates
+            date_details.append({
+                "date": d,
+                "uk_count": 0,
+                "mauritius_count": 0,
+                "has_uk": has,
+                "has_mauritius": False,
+                "has_data": has,
+                "has_snapshot": has,
+                "quiet_day": False,
+                "publication_timestamp": None,
+                "freshness_state": "ok" if has else "missing",
+                "confidence_level": "high" if has else "low",
+                "fallback_active": False,
+                "archive_available": False,
+                "mauritius_export_exists": False,
+            })
+        recommended = dates[0] if dates else (today - timedelta(days=1)).isoformat()
+        return {
+            "dates": dates,
+            "calendar_dates": calendar,
+            "snapshot_dates": dates,
+            "date_details": date_details,
+            "recommended": recommended,
+            "lookback_days": lookback,
+            "reason": "Most recent day with DB data",
+            "can_fetch_uk": bool(os.environ.get("COMPANIES_HOUSE_API_KEY")),
+            "can_fetch_mauritius": bool(os.environ.get("MAURITIUS_AUTO_REFRESH", "")),
+        }
 
     lookback = lookback_days if lookback_days is not None else default_nav_lookback_days()
     discovered = _discover_export_dates()
