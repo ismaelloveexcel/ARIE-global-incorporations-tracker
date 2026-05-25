@@ -12,11 +12,12 @@ import os
 import subprocess
 import sys
 import time
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -56,6 +57,8 @@ _MU_PEOPLE_MESSAGE = (
     "Director and PSC data is not yet available for Mauritius companies. "
     "This will be added when MNS API access is confirmed."
 )
+
+_AUTH_SCHEME = "Bearer"
 
 app = FastAPI(title="Arie Onboarding Intelligence Platform", version="1.0.0")
 
@@ -130,6 +133,54 @@ class DevConfigUpdate(BaseModel):
     assignment_pools: dict[str, list[str]] | None = None
     roadmap: list[dict] | None = None
     implementation_log: dict | None = None
+
+
+def _read_token() -> str:
+    return os.environ.get("ARIE_API_READ_TOKEN", "").strip()
+
+
+def _write_token() -> str:
+    return os.environ.get("ARIE_API_WRITE_TOKEN", "").strip()
+
+
+def _auth_enabled() -> bool:
+    return bool(_read_token() or _write_token())
+
+
+def _extract_bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != _AUTH_SCHEME.lower() or not value.strip():
+        return ""
+    return value.strip()
+
+
+def require_api_read(authorization: str | None = Header(default=None)) -> None:
+    if not _auth_enabled():
+        return
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    read = _read_token()
+    write = _write_token()
+    if read and secrets.compare_digest(token, read):
+        return
+    if write and secrets.compare_digest(token, write):
+        return
+    raise HTTPException(status_code=403, detail="Invalid API token")
+
+
+def require_api_write(authorization: str | None = Header(default=None)) -> None:
+    if not _auth_enabled():
+        return
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    write = _write_token()
+    if write and secrets.compare_digest(token, write):
+        return
+    raise HTTPException(status_code=403, detail="Write token required")
 
 
 def _jurisdiction_counts(rows: list[dict]) -> tuple[int, int]:
@@ -210,7 +261,7 @@ def _package_response(
     }
 
 
-@app.get("/api/available-dates")
+@app.get("/api/available-dates", dependencies=[Depends(require_api_read)])
 def api_available_dates():
     payload = scan_available_dates()
     payload["can_fetch_uk"] = bool(os.environ.get("COMPANIES_HOUSE_API_KEY"))
@@ -224,7 +275,7 @@ def _maybe_auto_refresh_mauritius(incorporation_date: str) -> dict | None:
     return refresh_mauritius_for_date(incorporation_date)
 
 
-@app.get("/api/data-status")
+@app.get("/api/data-status", dependencies=[Depends(require_api_read)])
 def api_data_status(
     target_date: str | None = Query(None, alias="date"),
 ):
@@ -236,7 +287,7 @@ def api_data_status(
     return get_data_status(d)
 
 
-@app.get("/api/meta")
+@app.get("/api/meta", dependencies=[Depends(require_api_read)])
 def api_meta():
     config = load_config()
     return {
@@ -259,15 +310,16 @@ def api_meta():
     }
 
 
-@app.get("/api/leads")
+@app.get("/api/leads", dependencies=[Depends(require_api_read)])
 def api_leads(
+    target_date: str | None = Query(None, alias="date"),
     incorporation_date: str | None = None,
     tab: str | None = Query(
         None,
         description="Queue tab: direct_clients (default) or introducers.",
     ),
 ):
-    d = incorporation_date or _latest_operational_date() or (date.today() - timedelta(days=1)).isoformat()
+    d = incorporation_date or target_date or _latest_operational_date() or (date.today() - timedelta(days=1)).isoformat()
     rows, meta = _load_merged_rows(d)
 
     if not rows and not pipeline_export_path(d).exists():
@@ -308,7 +360,7 @@ def api_leads(
     return _package_response(rows, tab, d, meta, last_refreshed=last)
 
 
-@app.post("/api/refresh")
+@app.post("/api/refresh", dependencies=[Depends(require_api_write)])
 def api_refresh(
     incorporation_date: str | None = None,
     tab: str | None = Query(None),
@@ -336,7 +388,7 @@ def api_refresh(
     )
 
 
-@app.post("/api/refresh/mauritius")
+@app.post("/api/refresh/mauritius", dependencies=[Depends(require_api_write)])
 def api_refresh_mauritius(
     incorporation_date: str | None = None,
     tab: str | None = Query(None),
@@ -374,7 +426,7 @@ def api_refresh_mauritius(
     return _package_response(rows, tab, d, meta, last_refreshed=last)
 
 
-@app.patch("/api/leads/{lead_id_key}")
+@app.patch("/api/leads/{lead_id_key}", dependencies=[Depends(require_api_write)])
 def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
     try:
         entry = assignments.set_assignment(
@@ -390,7 +442,7 @@ def api_update_lead(lead_id_key: str, body: AssignmentUpdate):
     return {"lead_id": lead_id_key, **entry}
 
 
-@app.get("/api/leads/{lead_id_key}/people")
+@app.get("/api/leads/{lead_id_key}/people", dependencies=[Depends(require_api_read)])
 def api_lead_people(
     lead_id_key: str,
     incorporation_date: str | None = None,
@@ -466,7 +518,7 @@ def api_lead_people(
     return result
 
 
-@app.post("/api/leads/{lead_id_key}/brief")
+@app.post("/api/leads/{lead_id_key}/brief", dependencies=[Depends(require_api_write)])
 def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None):
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY not set in .env")
@@ -504,7 +556,7 @@ def api_generate_brief(lead_id_key: str, incorporation_date: str | None = None):
     return {"lead_id": lead_id_key, "brief": brief, "lead": lead}
 
 
-@app.get("/api/leads/{lead_id_key}/brief")
+@app.get("/api/leads/{lead_id_key}/brief", dependencies=[Depends(require_api_read)])
 def api_get_brief(lead_id_key: str):
     from uk_leads.brief import load_brief
 
@@ -526,13 +578,13 @@ def api_dev_health(incorporation_date: str | None = None):
     return run_health_checks(incorporation_date)
 
 
-@app.get("/api/dev/config")
+@app.get("/api/dev/config", dependencies=[Depends(require_api_read)])
 def api_dev_config_get():
     _guard_dev_only()
     return load_config()
 
 
-@app.post("/api/dev/config")
+@app.post("/api/dev/config", dependencies=[Depends(require_api_write)])
 def api_dev_config_post(body: DevConfigUpdate):
     _guard_dev_only()
     config = load_config()
@@ -545,13 +597,13 @@ def api_dev_config_post(body: DevConfigUpdate):
     return save_config(config)
 
 
-@app.post("/api/dev/refresh/uk")
+@app.post("/api/dev/refresh/uk", dependencies=[Depends(require_api_write)])
 def api_dev_refresh_uk(incorporation_date: str | None = None):
     _guard_dev_only()
     return api_refresh(incorporation_date=incorporation_date)
 
 
-@app.post("/api/dev/refresh/mauritius")
+@app.post("/api/dev/refresh/mauritius", dependencies=[Depends(require_api_write)])
 def api_dev_refresh_mauritius(incorporation_date: str | None = None):
     _guard_dev_only()
     d = incorporation_date or date.today().isoformat()
@@ -562,13 +614,13 @@ def api_dev_refresh_mauritius(incorporation_date: str | None = None):
     return {"date": d, "success": result.get("outcome") == "OK", **result}
 
 
-@app.get("/api/dev/pipeline-alerts")
+@app.get("/api/dev/pipeline-alerts", dependencies=[Depends(require_api_read)])
 def api_dev_pipeline_alerts():
     _guard_dev_only()
     return get_pipeline_alert_status()
 
 
-@app.get("/api/dev/stats")
+@app.get("/api/dev/stats", dependencies=[Depends(require_api_read)])
 def api_dev_stats(incorporation_date: str | None = None):
     _guard_dev_only()
     d = incorporation_date or (date.today() - timedelta(days=1)).isoformat()

@@ -70,7 +70,10 @@ def pipeline_row_to_lead(row: dict[str, str], run_date: str) -> dict:
 
 
 def _db_source_enabled() -> bool:
-    return os.environ.get("LEAD_SOURCE", "csv").strip().lower() == "db"
+    source = os.environ.get("LEAD_SOURCE", "").strip().lower()
+    if source:
+        return source == "db"
+    return bool(os.environ.get("DATABASE_URL", "").strip())
 
 
 def _db_row_to_lead(row: dict) -> dict:
@@ -324,7 +327,6 @@ def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
     leads = [_db_row_to_lead(row) for row in rows]
 
     merged: list[dict] = []
-    by_lead_id: dict[str, dict] = {}
     duplicate_counts: dict[str, int] = {}
 
     for row in leads:
@@ -335,10 +337,7 @@ def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
                 enriched["company_number"] = ""
         lid = lead_id(enriched)
         enriched["lead_id"] = lid
-        if lid in by_lead_id:
-            duplicate_counts[lid] = duplicate_counts.get(lid, 1) + 1
-            continue
-        by_lead_id[lid] = enriched
+        duplicate_counts[lid] = duplicate_counts.get(lid, 0) + 1
         merged.append(enriched)
 
     for row in merged:
@@ -354,7 +353,7 @@ def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
         "pipeline_export_missing": False,
         "mauritius_export_missing": False,
         "warnings": [],
-        "duplicates_suppressed": sum(max(0, c - 1) for c in duplicate_counts.values()),
+        "duplicates_suppressed": 0,
     }
     return merged, meta
 
@@ -548,9 +547,7 @@ def _date_counts_for_scan(target_date: str) -> dict:
 
 def scan_available_dates(lookback_days: int | None = None) -> dict:
     """Return available dates. Uses DB or filesystem based on LEAD_SOURCE env var."""
-    import os
-
-    if os.environ.get("LEAD_SOURCE", "csv").strip().lower() == "db":
+    if _db_source_enabled():
         from db.postgres_client import fetch_available_dates
 
         dates = fetch_available_dates()
