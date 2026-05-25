@@ -62,6 +62,7 @@ FINANCIAL_SIC_CODES = [
 _BASE_URL = "https://api.company-information.service.gov.uk"
 _SEARCH_PATH = "/advanced-search/companies"
 _PAGE_SIZE = 100          # max items per page (API cap)
+_MAX_RECORDS_PER_DAY = 400
 _RATE_LIMIT_DELAY = 0.5   # seconds between requests (600 req/min limit)
 _SOURCE = "companies_house"
 
@@ -99,7 +100,6 @@ def _fetch_page(
     params = {
         "incorporated_from": date_from,
         "incorporated_to": date_to,
-        "sic_codes": ",".join(FINANCIAL_SIC_CODES),
         "size": 100,
         "start_index": start_index,
     }
@@ -165,8 +165,10 @@ def fetch_new_incorporations(
 
         for item in items:
             total_fetched += 1
-            if _is_financial_company(item):
-                records.append(_parse_record(item))
+            records.append(_parse_record(item))
+
+        if len(records) >= _MAX_RECORDS_PER_DAY:
+            break
 
         fetched_so_far = start_index + len(items)
         logger.debug(
@@ -176,7 +178,7 @@ def fetch_new_incorporations(
             start_index,
         )
 
-        if fetched_so_far >= total_results or not items:
+        if fetched_so_far >= total_results or not items or len(records) >= _MAX_RECORDS_PER_DAY:
             break
 
         start_index += _PAGE_SIZE
