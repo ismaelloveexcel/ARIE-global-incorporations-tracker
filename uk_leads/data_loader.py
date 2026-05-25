@@ -346,12 +346,17 @@ def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
         row["duplicate_group_size"] = group_size
         row["duplicate_suppressed_count"] = max(0, group_size - 1)
 
+    external_rows = load_external_introducers()
+    for row in external_rows:
+        merged.append(row)
+
     meta = {
         "source": "db",
         "date": incorporation_date,
         "count": len(merged),
         "pipeline_export_missing": False,
         "mauritius_export_missing": False,
+        "external_introducer_count": len(external_rows),
         "warnings": [],
         "duplicates_suppressed": 0,
     }
