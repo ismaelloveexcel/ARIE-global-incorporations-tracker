@@ -213,12 +213,11 @@ def fetch_available_dates(limit: int = 30) -> list[str]:
             SELECT DISTINCT incorporation_date::text AS d
             FROM companies
             WHERE incorporation_date IS NOT NULL
-            ORDER BY incorporation_date DESC
+            ORDER BY d DESC
             LIMIT %s
             """,
             (limit,),
         )
-        rows = cur.fetchall()
-        return [str(r.get("incorporation_date") or r.get("d")) for r in rows]
+        return [r["d"] for r in cur.fetchall()]
 
 
