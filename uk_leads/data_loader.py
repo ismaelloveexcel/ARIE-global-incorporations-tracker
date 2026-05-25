@@ -348,7 +348,11 @@ def _merge_leads_from_db(incorporation_date: str) -> tuple[list[dict], dict]:
 
     external_rows = load_external_introducers()
     for row in external_rows:
-        merged.append(row)
+        enriched = enrich_row(dict(row))
+        enriched["lead_type"] = "introducer"
+        lid = lead_id(enriched)
+        enriched["lead_id"] = lid
+        merged.append(enriched)
 
     meta = {
         "source": "db",
